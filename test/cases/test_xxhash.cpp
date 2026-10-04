@@ -1,4 +1,4 @@
-
+#include <cstring>
 #include <gtest/gtest.h>
 #include "src/core/options.h"
 #include "xxhash.h"

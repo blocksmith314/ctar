@@ -12,46 +12,7 @@
 #include "options.h"
 #include "sorted_map.h"
 #include "src/utils/status.h"
-/*
-*
 
-- [Header]  魔数 [8 字节]，版本号 [8 字节] ，元数据大小
-- [文件夹个数]
-- [文件夹元信息] [文件夹 id:{文件夹名称的偏移，文件夹名称大小，blob，文件夹属性}]  dir_map_
-- [每个文件夹下的文件夹 ID] [1:{2,3,4},2:{5,6}]  sub_dir_ids_
-- [文件夹下的文件] [1:{1,2,3},2:{4,5,6}] sub_file_ids_
-- [DirectoryName] [文件夹名称] dir_name_data_
-- [FileMeta] [文件的元信息 文件 id:{文件名偏移，文件大小，文件属性}] file_map_
-- [FileName] [文件的名称] file_name_data_
-- [blob0_meta + crc][blob1_meta + crc][blob2_meta + crc]
-- [blob0][blob1][blob2]
-- ---
-- 文件夹元信息
-- 包含文件夹 id, 文件夹名的偏移量（相对于整个文件），文件夹名称大小，{blob_id_cnt}[blob_id1,blob_id2], 文件夹属性
-- ---
-- ---
-- blob0_meta-> [offset,size,crc]
-- offset 是相对于整个文件的偏移量，因为压缩前可以确定
-- size 是 blob0 的大小
-- crc 是整个 blob1_meta 的值，只有压缩完才可以确定
-- blob1_meta-> [offset,size,crc]
-- ---
-- blob0-> [file_cnt][file0_id,file1_id,file3_id][file0_offset,file1_offset,file2_offset][file1_data,file2_data]
-- file0_offset 是相对于 blob0 的偏移量
-- blob1-> [file_cnt][file3_id,file4_id,file5_id][file3_offset,file4_offset,file5_offset][file1_data,file2_data]
-- 初始化：
-- 1. 读取 Header, 确定元数据大小
-- 2. 读取元数据，还原 dir_map_，sub_dir_ids_，sub_file_ids_，file_map_，file_name_data_
-
-*/
-
-
-/*
- *
- *
- *
- *
- */
 
 namespace ctar
 {
@@ -275,7 +236,7 @@ namespace ctar
             {
                 real_sum += val.size();
             }
-            assert(real_sum == pack_file_meta_.total_file_cnt && "total_file_cnt_ cache dirty");
+            assert(real_sum == pack_file_meta_.total_file_count && "total_file_count cache dirty");
 #endif
             return pack_file_meta_.total_file_count;
         }
@@ -300,10 +261,10 @@ namespace ctar
 
         /// @brief Get file stats of packed file
         /// @return File statistics summary
-        ///         - total_file_cnt: number of stored files
-        ///         - total_bytes: original uncompressed total size
-        ///         - compressed_bytes: compressed payload total size
-        ///         - padding_bytes: alignment padding bytes
+        ///         - total_file_count: number of stored files
+        ///         - total_original_size: original uncompressed total size
+        ///         - total_compressed_size: compressed payload total size
+        ///         - padding_size: alignment padding bytes
         [[nodiscard]] FileStats GetFileStats() const
         {
             return {pack_file_meta_.total_file_count, pack_file_meta_.total_original_size,

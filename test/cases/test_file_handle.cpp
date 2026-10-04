@@ -2,6 +2,8 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <cstring>
+
 #include "gtest/gtest.h"
 #include "src/core/file_handle.h"
 #include "src/utils/status.h"
@@ -43,7 +45,7 @@ namespace ctar::test
         ASSERT_TRUE(w_res);
         auto& wf = w_res.value();
 
-        constexpr std::string src_data = "abcdef0123456789";
+        std::string src_data = "abcdef0123456789";
         Status st = wf->Write(src_data.size(), src_data.data());
         ASSERT_TRUE(st);
 
@@ -68,7 +70,7 @@ namespace ctar::test
     {
         auto w_res = ctar::NewPosixWriteFile(std::string(kTestFile), true);
         ASSERT_TRUE(w_res);
-        constexpr std::string data = "0123456789ABCDEF";
+        constexpr std::string_view data = "0123456789ABCDEF";
         ASSERT_TRUE(w_res.value()->Write(data.size(), data.data()));
         w_res.value().reset();
 
@@ -99,7 +101,7 @@ namespace ctar::test
     {
         auto w_res = ctar::NewPosixWriteFile(std::string(kTestFile), true);
         ASSERT_TRUE(w_res);
-        constexpr std::string data = "0123456789ABCDEF";
+        constexpr std::string_view data = "0123456789ABCDEF";
         ASSERT_TRUE(w_res.value()->Write(data.size(), data.data()));
         w_res.value().reset();
 
@@ -127,7 +129,7 @@ namespace ctar::test
         std::string base(32, '-');
         ASSERT_TRUE(wf->Write(base.size(), base.data()));
 
-        constexpr std::string s = "HELLO";
+        constexpr std::string_view s = "HELLO";
         ASSERT_TRUE(wf->RandomWrite(8U, s.size(), s.data()));
         wf.reset();
 
