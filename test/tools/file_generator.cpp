@@ -5,6 +5,7 @@
 #include <string_view>
 #include <unistd.h>
 #include <utility>
+#include <print>
 
 #include "file_generator.h"
 
