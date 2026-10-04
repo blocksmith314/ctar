@@ -1,6 +1,7 @@
 # This starter workflow is for a CMake project running on multiple platforms. There is a different starter workflow if you just want a single platform.
 # See: https://github.com/actions/starter-workflows/blob/main/ci/cmake-single-platform.yml
 name: CMake on multiple platforms
+
 on:
   push:
     branches: [ "main", "dev" ]
@@ -38,12 +39,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt update
-          sudo apt install -y gcc-14 g++-14 clang-19 libstdc++-14-dev cmake
+          sudo apt install -y gcc-14 g++-14 clang-19 libstdc++-14-dev cmake ninja-build
 
       - name: Install dependencies (macOS only)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install cmake llvm
+          brew install cmake llvm ninja
 
       - name: Set reusable strings
         id: strings
@@ -52,10 +53,10 @@ jobs:
           echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
       - name: Configure CMake
-        # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-        # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+        # Force Ninja generator for all platforms, single‑config, unified logic
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
+          -G Ninja
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -64,14 +65,15 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
-        run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}
+        # Single‑config(Ninja): DO NOT use --config
+        run: cmake --build ${{ steps.strings.outputs.build-output-dir }}
 
       - name: Test
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
-        # Execute tests defined by the CMake configuration.
-        run: ctest --build-config ${{ matrix.build_type }} --output-on-failure
+        # Single‑config: DO NOT use --build‑config
+        run: ctest --output-on-failure
 
       - name: Dump ctest detailed log on failure
-        if: failure() && runner.os == 'Linux'
+        if: failure()
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
         run: cat Testing/Temporary/LastTest.log
