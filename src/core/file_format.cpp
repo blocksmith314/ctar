@@ -2,6 +2,7 @@
 #include <pwd.h>
 #include <ranges>
 #include <cstring>
+#include <cerrno>
 #include <sys/stat.h>
 
 #include "file_format.h"
