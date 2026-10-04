@@ -1,6 +1,8 @@
 #ifndef CTAR_TOOLS_H
 #define CTAR_TOOLS_H
 
+#include <print>
+
 namespace ctar
 {
 

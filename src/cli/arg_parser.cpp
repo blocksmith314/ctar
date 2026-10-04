@@ -1,8 +1,8 @@
-#include "src/cli/arg_parser.h"
 #include <fstream>
 #include <iostream>
 #include <xxhash.h>
 
+#include "src/cli/arg_parser.h"
 #include "api/ctar.h"
 #include "src/core/block_store.h"
 
