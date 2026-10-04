@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <random>
 #include <string>
+#include <cstring>
 #include <unordered_set>
 #include <vector>
 
