@@ -10,6 +10,7 @@
 #ifndef CTAR_CODING_H
 #define CTAR_CODING_H
 #include <string>
+#include <cstdint>
 namespace ctar
 {
     inline uint8_t DecodeFixed8(const char* ptr) { return static_cast<uint8_t>(*ptr); }

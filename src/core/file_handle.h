@@ -3,6 +3,8 @@
 
 #include <memory>
 #include <string>
+#include <cstdint>
+
 #include "src/utils/status.h"
 
 namespace ctar
