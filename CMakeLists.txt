@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BUILD_CLI "Build command‑line executable" ON)
 option(BUILD_TEST "Build unit tests" ON)
-option(BUILD_BENCHMARKS "Enable benchmarks" ON)
+option(BUILD_BENCHMARKS "Enable benchmarks" OFF)
 option(BUILD_ASAN "Enable AddressSanitizer + UBSan for tests only" OFF)
 
 find_package(PkgConfig QUIET)
@@ -25,7 +25,7 @@ else ()
     FetchContent_Declare(
             lz4
             GIT_REPOSITORY https://github.com/lz4/lz4.git
-            GIT_TAG v1.9.4
+            GIT_TAG v1.10.0
             SOURCE_DIR "${LZ4_LOCAL_DIR}"
     )
     FetchContent_MakeAvailable(lz4)
@@ -76,7 +76,8 @@ target_include_directories(${PROJECT_NAME}_lib PUBLIC
         $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-# ========== 关键修复：仅构建期链接lz4，导出目标不带lz4依赖 ==========
+
+
 target_link_libraries(${PROJECT_NAME}_lib PRIVATE $<BUILD_INTERFACE:lz4::lz4>)
 set_target_properties(${PROJECT_NAME}_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
