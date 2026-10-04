@@ -1,6 +1,7 @@
 #include <grp.h>
 #include <pwd.h>
 #include <ranges>
+#include <cstring>
 #include <sys/stat.h>
 
 #include "file_format.h"
