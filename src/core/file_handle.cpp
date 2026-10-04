@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <utility>
 #include <vector>
+#include <cerrno>
+
 #include "file_handle.h"
 
 
