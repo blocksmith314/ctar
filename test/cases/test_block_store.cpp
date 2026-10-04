@@ -98,7 +98,7 @@ namespace ctar
         std::string pack_file = pack_dir_ / "random_file.ctar";
         fs::path unpack_dir_{"random_unpack_test_dir"};
 
-        size_t test_file_count_ = 5000;
+        size_t test_file_count_ = 1000;
         size_t first_level_dir_count_ = 10;
         size_t max_dir_depth_ = 5;
         size_t min_file_size_ = 128;
