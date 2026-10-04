@@ -1,0 +1,36 @@
+========================================================
+ctar
+Copyright (c) 2026 Your Name
+Licensed under the Apache License, Version 2.0
+========================================================
+
+This product includes software from third‑party open‑source components.
+
+--------------------------------------
+1. LZ4
+Project: LZ4 - Fast LZ compression algorithm
+Copyright (c) 2011‑2025, Yann Collet
+License: BSD 2‑Clause
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+- Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+--------------------------------------
+2. GoogleTest
+Project: Google Test Framework
+Copyright 2008‑2025 Google LLC
+License: Apache‑2.0
+
+--------------------------------------
+3. Google Benchmark
+Project: Google Benchmark
+Copyright 2015‑2025 Google LLC
+License: Apache‑2.0
+
+Apache‑2.0 License full text can be obtained at:
+https://www.apache.org/licenses/LICENSE‑2.0
