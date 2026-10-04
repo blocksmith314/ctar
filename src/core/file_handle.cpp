@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <utility>
 #include <vector>
+#include <cstring>
 #include <cerrno>
 
 #include "file_handle.h"
@@ -86,7 +87,7 @@ namespace ctar
 
             if (bytes_read < 0)
             {
-                return error_io("fail to read data from {}: {}", file_name_, strerror(errno));
+                return error_io("fail to read data from {}: {}", file_name_, std::strerror(errno));
             }
             return static_cast<size_t>(bytes_read);
         }
