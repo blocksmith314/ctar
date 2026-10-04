@@ -4,7 +4,6 @@
 
 #include "src/cli/arg_parser.h"
 #include "api/ctar.h"
-#include "src/core/block_store.h"
 
 
 namespace

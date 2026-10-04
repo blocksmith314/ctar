@@ -1,0 +1,10 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: ctar
+Description: Cloud‑era Tar — modern archive library optimized for cloud blob storage
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lctar_lib
+Cflags: -I${includedir}
