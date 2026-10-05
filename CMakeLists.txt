@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.14)
-project(ctar VERSION 0.1.0 LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.20)
+project(ctar VERSION 1.0.0 LANGUAGES C CXX)
 
 MESSAGE(STATUS "PROJECT_NAME ${PROJECT_NAME}")
 
