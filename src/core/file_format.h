@@ -76,7 +76,7 @@ namespace ctar
         [[nodiscard]] std::string to_string() const { return std::format("{}.{}.{}", major, minor, patch); }
     };
 
-    inline Version cur_version{0, 0, 1};
+    inline Version cur_version{1, 0, 0};
 
 
     /// @brief Stores calculated maximum column widths for LIST formatted directory output
