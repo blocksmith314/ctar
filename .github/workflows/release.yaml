@@ -1,0 +1,230 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+
+  build-linux:
+    name: linux-x86_64
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git cmake ninja-build software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update
+          apt-get install -y --no-install-recommends gcc-14 g++-14
+          echo "--- toolchain ---"
+          g++-14 --version | head -1
+          cmake --version | head -1
+          ninja --version
+
+      - name: Cache third-party sources
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: third-party-linux-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_C_COMPILER=gcc-14
+          -DCMAKE_CXX_COMPILER=g++-14
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX=/usr/local
+          -DBUILD_CLI=ON
+          -DBUILD_TEST=OFF
+          -DBUILD_BENCHMARKS=OFF
+          -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Install into staging tree
+        run: cmake --install build --prefix "$PWD/stage"
+
+      - name: Check glibc baseline
+        run: |
+          BASE=$(objdump -T stage/bin/ctar 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "产物要求的最低 glibc: ${BASE:-无（静态链接）}"
+          if [ -n "$BASE" ]; then
+            HIGHEST=$(printf '%s\n' GLIBC_2.35 "$BASE" | sort -V | tail -1)
+            if [ "$HIGHEST" != "GLIBC_2.35" ]; then
+              echo "::error::产物要求 $BASE，高于 Ubuntu 22.04 的 GLIBC_2.35，22.04 将无法运行"
+              exit 1
+            fi
+            echo "✓ 不超过 GLIBC_2.35，可在 Ubuntu 22.04+ 运行"
+          fi
+
+      - name: Show runtime dependencies
+        run: ldd stage/bin/ctar
+
+      - name: Stage release assets
+        run: |
+          VERSION="${GITHUB_REF_NAME:-$(git rev-parse --short HEAD)}"
+          BASE="ctar-${VERSION}-linux-x86_64"
+
+          strip stage/bin/ctar || true
+          mkdir -p dist
+          cp stage/bin/ctar "dist/${BASE}"
+          chmod +x "dist/${BASE}"
+          tar -C stage -czf "dist/${BASE}.tar.gz" .
+
+          ls -lh dist
+
+      - name: Smoke test the shipped binary
+        run: |
+          dist/ctar-*-linux-x86_64 --help > /dev/null
+          echo "standalone binary runs OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+  build-macos:
+    name: macos-arm64
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          g++-14 --version | head -1
+          cmake --version | head -1
+          ninja --version
+
+      - name: Cache third-party sources
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: third-party-macos-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_C_COMPILER=gcc-14
+          -DCMAKE_CXX_COMPILER=g++-14
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX=/usr/local
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          -DBUILD_CLI=ON
+          -DBUILD_TEST=OFF
+          -DBUILD_BENCHMARKS=OFF
+          -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Install into staging tree
+        run: cmake --install build --prefix "$PWD/stage"
+
+      - name: Check runtime dependencies and deployment target
+        run: |
+          otool -L stage/bin/ctar
+          MINOS=$(otool -l stage/bin/ctar | grep -A4 LC_BUILD_VERSION | awk '/minos/{print $2}')
+          echo "最低 macOS 版本: $MINOS"
+          if [ -z "$MINOS" ]; then
+            echo "::error::无法读取 LC_BUILD_VERSION，产物可能不可用"
+            exit 1
+          fi
+          if [ "$MINOS" != "11.0" ]; then
+            echo "::warning::最低版本为 $MINOS，与预期的 11.0 不一致，请据此调整 CMAKE_OSX_DEPLOYMENT_TARGET"
+          fi
+          if otool -L stage/bin/ctar | grep -q '/opt/homebrew'; then
+            echo "::error::产物仍依赖 Homebrew 动态库，静态链接未生效"
+            exit 1
+          fi
+
+      - name: Stage release assets
+        run: |
+          VERSION="${GITHUB_REF_NAME:-$(git rev-parse --short HEAD)}"
+          BASE="ctar-${VERSION}-macos-arm64"
+
+          strip stage/bin/ctar || true
+          mkdir -p dist
+          cp stage/bin/ctar "dist/${BASE}"
+          chmod +x "dist/${BASE}"
+          tar -C stage -czf "dist/${BASE}.tar.gz" .
+
+          ls -lh dist
+
+      - name: Smoke test the shipped binary
+        run: |
+          dist/ctar-*-macos-arm64 --help > /dev/null
+          echo "standalone binary runs OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  release:
+    needs: [ build-linux, build-macos ]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          sha256sum ctar-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Write usage notes
+        run: |
+          cat > NOTES.md <<'EOF'
+          ### Standalone executable
+
+          No install needed — download the file **without** the `.tar.gz` suffix,
+          then make it executable:
+
+          ```
+          chmod +x ctar-<version>-<platform>
+          ./ctar-<version>-<platform> --help
+          ```
+
+          Platform requirements:
+
+          * `linux-x86_64` — glibc 2.35 or newer (Ubuntu 22.04+)
+          * `macos-arm64` — macOS 11 or newer (Apple Silicon)
+
+          ### Full package (`.tar.gz`)
+
+          Contains the executable plus headers, static libraries, CMake package
+          config and a pkg-config file, for using ctar as a library:
+
+          ```
+          sudo tar -xzf ctar-<version>-<platform>.tar.gz -C /usr/local
+          sudo ldconfig
+          ```
+
+          Verify your download against `SHA256SUMS`.
+          EOF
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes "$(cat NOTES.md)" \
+            --generate-notes

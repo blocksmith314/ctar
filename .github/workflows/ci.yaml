@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux / GCC 14
+            os: ubuntu-24.04
+            cc: gcc-14
+            cxx: g++-14
+            extra: ''
+          - name: Linux / Clang 19
+            os: ubuntu-24.04
+            cc: clang-19
+            cxx: clang++-19
+            extra: ''
+          - name: macOS / arm64 (GCC 14)
+            os: macos-26
+            cc: gcc-14
+            cxx: g++-14
+            extra: '-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"'
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-14 g++-14 clang-19 libstdc++-14-dev
+
+      - name: Show toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          g++-14 --version | head -1
+          cmake --version | head -1
+          ninja --version
+
+      - name: Cache third-party sources
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: third-party-${{ matrix.os }}-${{ matrix.cc }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_C_COMPILER=${{ matrix.cc }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=ON
+          -DBUILD_BENCHMARKS=OFF
+          ${{ matrix.extra }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Report platform baseline (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "最低 glibc: $(objdump -T build/ctar | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          ldd build/ctar
+
+      - name: Report platform baseline (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          otool -l build/ctar | grep -A4 LC_BUILD_VERSION | awk '/minos/{print "最低 macOS:", $2}'
+          otool -L build/ctar
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Dump ctest log on failure
+        if: failure()
+        working-directory: build
+        run: cat Testing/Temporary/LastTest.log
