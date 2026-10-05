@@ -12,45 +12,49 @@ jobs:
   build-linux:
     name: linux-x86_64
     runs-on: ubuntu-24.04
-    container: ubuntu:22.04
+    container: almalinux:9
     steps:
       - uses: actions/checkout@v4
 
-      # The jammy repositories do not ship gcc-14 (verified: "Package not
-      # available in this suite"), while <print>/std::print in the code
-      # requires GCC >= 14, so the toolchain PPA is mandatory.
-      # jammy ships cmake 3.22 (>= 3.20, enough for CMAKE_CXX_STANDARD 23)
-      # and ninja.
+      # AlmaLinux 9 does not ship GCC 14 as its default toolchain; gcc-toolset-14
+      # provides it and installs under /opt/rh, which is NOT on PATH by default.
+      # cmake 3.31 (>= 3.20, enough for CMAKE_CXX_STANDARD 23) is in AppStream.
+      # ninja-build only lives in the CRB repository, which is disabled by
+      # default, so the default Makefiles generator is used instead; make is in
+      # BaseOS.
       - name: Install toolchain
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git cmake ninja-build software-properties-common
-          add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          apt-get update
-          apt-get install -y --no-install-recommends gcc-14 g++-14
+          dnf install -y --setopt=install_weak_deps=False \
+            git tar gzip binutils cmake make gcc-toolset-14
           echo "--- toolchain ---"
-          g++-14 --version | head -1
+          /opt/rh/gcc-toolset-14/root/usr/bin/g++ --version | head -1
           cmake --version | head -1
-          ninja --version
+          make --version | head -1
+          # The gcc-toolset binaries are not on PATH and need their own runtime
+          # libraries, so both are exported for the remaining steps.
+          echo "/opt/rh/gcc-toolset-14/root/usr/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=/opt/rh/gcc-toolset-14/root/usr/lib64:/opt/rh/gcc-toolset-14/root/usr/lib" >> "$GITHUB_ENV"
+
+      - name: Show compiler on PATH
+        run: g++ --version | head -1
 
       - name: Cache third-party sources
         uses: actions/cache@v4
         with:
           path: third_party
-          key: third-party-linux-${{ hashFiles('CMakeLists.txt') }}
+          key: third-party-almalinux9-${{ hashFiles('CMakeLists.txt') }}
 
       # CMAKE_INSTALL_PREFIX is baked into ctar.pc at configure time, so it is
       # fixed at /usr/local to keep the .pc file consistent with where the
       # package is installed.
-      # -static-libstdc++ is required, not optional: the container's GCC 14
-      # libstdc++ is newer than the one shipped by Ubuntu 22.04, so without
-      # static linking the binary fails with GLIBCXX_3.4.3x not found.
+      # -static-libstdc++ is required, not optional: gcc-toolset-14's libstdc++
+      # is newer than the one shipped by AlmaLinux 9, so without static linking
+      # the binary fails with GLIBCXX_3.4.3x not found.
       - name: Configure
         run: >
-          cmake -S . -B build -G Ninja
-          -DCMAKE_C_COMPILER=gcc-14
-          -DCMAKE_CXX_COMPILER=g++-14
+          cmake -S . -B build
+          -DCMAKE_C_COMPILER=/opt/rh/gcc-toolset-14/root/usr/bin/gcc
+          -DCMAKE_CXX_COMPILER=/opt/rh/gcc-toolset-14/root/usr/bin/g++
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_INSTALL_PREFIX=/usr/local
           -DBUILD_CLI=ON
@@ -59,25 +63,25 @@ jobs:
           -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build --parallel "$(nproc)"
 
       - name: Install into staging tree
         run: cmake --install build --prefix "$PWD/stage"
 
       # Enforce the compatibility promise: if a future change raises the glibc
-      # baseline above 2.35, fail the build instead of shipping a binary that
-      # cannot run on Ubuntu 22.04.
+      # baseline above 2.34, fail the build instead of shipping a binary that
+      # cannot run on RHEL 9.
       - name: Check glibc baseline
         run: |
           BASE=$(objdump -T stage/bin/ctar 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
           echo "minimum glibc required: ${BASE:-none (statically linked)}"
           if [ -n "$BASE" ]; then
-            HIGHEST=$(printf '%s\n' GLIBC_2.35 "$BASE" | sort -V | tail -1)
-            if [ "$HIGHEST" != "GLIBC_2.35" ]; then
-              echo "::error::binary requires $BASE, above GLIBC_2.35 of Ubuntu 22.04; it will not run there"
+            HIGHEST=$(printf '%s\n' GLIBC_2.34 "$BASE" | sort -V | tail -1)
+            if [ "$HIGHEST" != "GLIBC_2.34" ]; then
+              echo "::error::binary requires $BASE, above GLIBC_2.34 of RHEL 9; it will not run there"
               exit 1
             fi
-            echo "OK: not above GLIBC_2.35, runs on Ubuntu 22.04+"
+            echo "OK: not above GLIBC_2.34, runs on RHEL 9+, Ubuntu 22.04+ and Debian 12+"
           fi
 
       - name: Show runtime dependencies
@@ -226,8 +230,9 @@ jobs:
 
           Platform requirements:
 
-          * `linux-x86_64` — glibc 2.35 or newer (Ubuntu 22.04+)
-          * `macos-arm64` — macOS 13.3 or newer (Apple Silicon)
+          * `linux-x86_64` — x86_64, glibc 2.34 or newer
+            (RHEL 9 / Rocky 9 / Alma 9, Ubuntu 22.04+, Debian 12+)
+          * `macos-arm64` — Apple Silicon, macOS 13.3 or newer
 
           ### Full package (`.tar.gz`)
 
