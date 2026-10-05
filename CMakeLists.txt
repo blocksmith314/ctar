@@ -13,6 +13,11 @@ option(BUILD_BENCHMARKS "Enable benchmarks" OFF)
 option(BUILD_ASAN "Enable AddressSanitizer + UBSan for tests only" OFF)
 
 find_package(PkgConfig QUIET)
+# std::thread is used by the thread pool. On glibc < 2.34 the pthread symbols
+# live in a separate library, so -pthread must be added explicitly; on newer
+# glibc they were merged into libc and the flag becomes a no-op. Relying on that
+# merge made the project fail to link on RHEL 8 and Ubuntu 20.04.
+find_package(Threads REQUIRED)
 include(FetchContent)
 
 set(LZ4_LOCAL_DIR "${PROJECT_SOURCE_DIR}/third_party/lz4")
@@ -78,7 +83,9 @@ target_include_directories(${PROJECT_NAME}_lib PUBLIC
 )
 
 
-target_link_libraries(${PROJECT_NAME}_lib PRIVATE $<BUILD_INTERFACE:lz4::lz4>)
+target_link_libraries(${PROJECT_NAME}_lib PRIVATE $<BUILD_INTERFACE:lz4::lz4> Threads::Threads)
+# Threads::Threads is intentionally NOT wrapped in $<BUILD_INTERFACE:...>: because
+# ctar_lib is a static library, consumers have to link pthread as well.
 set_target_properties(${PROJECT_NAME}_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ========= CLI =========
