@@ -6,10 +6,21 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write          # required to create a release
 
 jobs:
-
+  # ---------------------------------------------------------------------------
+  # Linux: build inside an Ubuntu 22.04 container so the glibc baseline is 2.35.
+  #
+  # glibc only works "build old, run new". Building directly on the
+  # ubuntu-24.04 runner would require glibc 2.39, which Ubuntu 22.04 (2.35)
+  # cannot satisfy. Building inside an ubuntu:22.04 container produces a binary
+  # that runs on Ubuntu 22.04 and newer.
+  #
+  # Why not simply use the ubuntu-22.04 runner: GitHub has announced that image
+  # starts deprecation on 2026-09-17 and is removed by 2027-04; the container
+  # approach is not affected by that schedule.
+  # ---------------------------------------------------------------------------
   build-linux:
     name: linux-x86_64
     runs-on: ubuntu-24.04
@@ -17,6 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The jammy repositories do not ship gcc-14 (verified: "Package not
+      # available in this suite"), while <print>/std::print in the code
+      # requires GCC >= 14, so the toolchain PPA is mandatory.
+      # jammy ships cmake 3.22 (>= 3.20, enough for CMAKE_CXX_STANDARD 23)
+      # and ninja.
       - name: Install toolchain
         run: |
           apt-get update
@@ -36,6 +52,12 @@ jobs:
           path: third_party
           key: third-party-linux-${{ hashFiles('CMakeLists.txt') }}
 
+      # CMAKE_INSTALL_PREFIX is baked into ctar.pc at configure time, so it is
+      # fixed at /usr/local to keep the .pc file consistent with where the
+      # package is installed.
+      # -static-libstdc++ is required, not optional: the container's GCC 14
+      # libstdc++ is newer than the one shipped by Ubuntu 22.04, so without
+      # static linking the binary fails with GLIBCXX_3.4.3x not found.
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
@@ -54,17 +76,20 @@ jobs:
       - name: Install into staging tree
         run: cmake --install build --prefix "$PWD/stage"
 
+      # Enforce the compatibility promise: if a future change raises the glibc
+      # baseline above 2.35, fail the build instead of shipping a binary that
+      # cannot run on Ubuntu 22.04.
       - name: Check glibc baseline
         run: |
           BASE=$(objdump -T stage/bin/ctar 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-          echo "产物要求的最低 glibc: ${BASE:-无（静态链接）}"
+          echo "minimum glibc required: ${BASE:-none (statically linked)}"
           if [ -n "$BASE" ]; then
             HIGHEST=$(printf '%s\n' GLIBC_2.35 "$BASE" | sort -V | tail -1)
             if [ "$HIGHEST" != "GLIBC_2.35" ]; then
-              echo "::error::产物要求 $BASE，高于 Ubuntu 22.04 的 GLIBC_2.35，22.04 将无法运行"
+              echo "::error::binary requires $BASE, above GLIBC_2.35 of Ubuntu 22.04; it will not run there"
               exit 1
             fi
-            echo "✓ 不超过 GLIBC_2.35，可在 Ubuntu 22.04+ 运行"
+            echo "OK: not above GLIBC_2.35, runs on Ubuntu 22.04+"
           fi
 
       - name: Show runtime dependencies
@@ -94,9 +119,37 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # ---------------------------------------------------------------------------
+  # macOS: use Homebrew GCC 14 rather than the system clang, so that the
+  # minimum supported macOS version can be lowered.
+  #
+  # In Apple's libc++ the floating-point std::to_chars is an OS-exported,
+  # availability-annotated symbol
+  # (_LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT), and std::format/std::print
+  # instantiate the floating-point formatter regardless of the argument types:
+  #   std::format("{}:{}", std::string, int)
+  # fails with -mmacosx-version-min=11.0 (error: to_chars ... macOS 13.3).
+  # So any clang-built binary is pinned to macOS 13.3 or newer.
+  #
+  # libstdc++ ships its own Ryu-based to_chars
+  # (libstdc++-v3/src/c++17/floating_to_chars.cc, namespace ryu) compiled into
+  # the library with no OS dependency, so GCC is the only way to go lower.
+  # The cost is that libstdc++ has to be linked statically.
+  #
+  # Also note macos-14 is marked deprecated, so macos-26 is used here.
+  # If CMAKE_OSX_DEPLOYMENT_TARGET is not set, the binary records the runner's
+  # own OS version (measured: minos 26.0), which would only run on the newest
+  # macOS.
+  #
+  # BUILD_TEST=OFF is required here, not just an optimisation: GCC cannot parse
+  # mach/message.h from the macOS 26 SDK (gtest-port.cc includes
+  # <mach/mach_init.h>, which pulls it in), so enabling tests would try to build
+  # googletest and fail. Unit tests on macOS are covered by the clang in
+  # ci.yaml.
+  # ---------------------------------------------------------------------------
   build-macos:
     name: macos-arm64
-    runs-on: macos-26
+    runs-on: macos-26          # Apple Silicon; use macos-26-intel for Intel
     steps:
       - uses: actions/checkout@v4
 
@@ -112,6 +165,9 @@ jobs:
           path: third_party
           key: third-party-macos-${{ hashFiles('CMakeLists.txt') }}
 
+      # -static-libstdc++ is likewise required: otherwise the binary depends on
+      # Homebrew's /opt/homebrew/opt/gcc/.../libstdc++.6.dylib and will not run
+      # for users who do not have GCC installed.
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
@@ -131,20 +187,23 @@ jobs:
       - name: Install into staging tree
         run: cmake --install build --prefix "$PWD/stage"
 
+      # Confirm the binary does not depend on Homebrew dynamic libraries and
+      # print the actual minimum OS version. Trust the printed value for GCC's
+      # support of 11.0; if it differs, adjust CMAKE_OSX_DEPLOYMENT_TARGET.
       - name: Check runtime dependencies and deployment target
         run: |
           otool -L stage/bin/ctar
           MINOS=$(otool -l stage/bin/ctar | grep -A4 LC_BUILD_VERSION | awk '/minos/{print $2}')
-          echo "最低 macOS 版本: $MINOS"
+          echo "minimum macOS: $MINOS"
           if [ -z "$MINOS" ]; then
-            echo "::error::无法读取 LC_BUILD_VERSION，产物可能不可用"
+            echo "::error::cannot read LC_BUILD_VERSION; the binary may be unusable"
             exit 1
           fi
           if [ "$MINOS" != "11.0" ]; then
-            echo "::warning::最低版本为 $MINOS，与预期的 11.0 不一致，请据此调整 CMAKE_OSX_DEPLOYMENT_TARGET"
+            echo "::warning::minimum is $MINOS rather than the expected 11.0; adjust CMAKE_OSX_DEPLOYMENT_TARGET accordingly"
           fi
           if otool -L stage/bin/ctar | grep -q '/opt/homebrew'; then
-            echo "::error::产物仍依赖 Homebrew 动态库，静态链接未生效"
+            echo "::error::binary still depends on Homebrew dynamic libraries; static linking did not take effect"
             exit 1
           fi
 
@@ -175,6 +234,8 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     needs: [ build-linux, build-macos ]
+    # When triggered manually (not by a tag), only build the artifacts and do
+    # not create a release.
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     steps:
