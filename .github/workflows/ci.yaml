@@ -26,42 +26,31 @@ jobs:
             os: ubuntu-24.04
             cc: gcc-14
             cxx: g++-14
-            test: 'ON'
             extra: ''
           - name: Linux / Clang 19
             os: ubuntu-24.04
             cc: clang-19
             cxx: clang++-19
-            test: 'ON'
             extra: ''
-          - name: macOS / arm64 (clang, tests)
+          - name: macOS / arm64 (clang)
             os: macos-26
             cc: clang
             cxx: clang++
-            test: 'ON'
-            extra: ''
-          - name: macOS / arm64 (GCC 14, release recipe)
-            os: macos-26
-            cc: gcc-14
-            cxx: g++-14
-            test: 'OFF'
-            extra: '-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_C_FLAGS="-mmacosx-version-min=11.0" -DCMAKE_CXX_FLAGS="-mmacosx-version-min=11.0" -DCMAKE_EXE_LINKER_FLAGS="-mmacosx-version-min=11.0 -static-libstdc++ -static-libgcc"'
+            extra: '-DCMAKE_OSX_DEPLOYMENT_TARGET=13.3'
 
     steps:
       - uses: actions/checkout@v4
 
-      # The code uses <print>/std::print, which requires GCC >= 14 or
-      # libc++ >= 18. On Linux, clang-19 uses libstdc++ by default, so gcc-14
-      # must be installed for clang to see a libstdc++ 14 that has <print>
-      # rather than the distribution's default 13.
+      # clang-19 on Linux uses libstdc++ by default, so gcc-14 has to be present
+      # for clang to pick up a libstdc++ 14 that has <print>, rather than the
+      # distribution's default 13.
       - name: Install toolchain (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build gcc-14 g++-14 clang-19 libstdc++-14-dev
 
-      # On macOS, clang / gcc-14 / cmake / ninja are all preinstalled on the
-      # runner image, so nothing needs to be installed.
+      # On macOS, clang / cmake / ninja are preinstalled on the runner image.
       - name: Show toolchain (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -76,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: third-party-${{ matrix.os }}-${{ matrix.cc }}-${{ matrix.test }}-${{ hashFiles('CMakeLists.txt') }}
+          key: third-party-${{ matrix.os }}-${{ matrix.cc }}-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Configure
         run: >
@@ -84,7 +73,7 @@ jobs:
           -DCMAKE_C_COMPILER=${{ matrix.cc }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
           -DCMAKE_BUILD_TYPE=Release
-          -DBUILD_TEST=${{ matrix.test }}
+          -DBUILD_TEST=ON
           -DBUILD_BENCHMARKS=OFF
           ${{ matrix.extra }}
 
@@ -99,32 +88,32 @@ jobs:
           echo "minimum glibc: $(objdump -T build/ctar | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
           ldd build/ctar
 
-      - name: Report platform baseline (macOS)
+      - name: Check platform baseline (macOS)
         if: runner.os == 'macOS'
         run: |
           otool -L build/ctar
           MINOS=$(otool -l build/ctar | grep -A4 LC_BUILD_VERSION | awk '/minos/{print $2}')
           echo "minimum macOS: $MINOS"
-          # Homebrew GCC does not pick up CMAKE_OSX_DEPLOYMENT_TARGET on its own
-          # (measured: minos 26.0, i.e. the runner's own OS), so the deployment
-          # flag is passed explicitly via CMAKE_*_FLAGS. Assert it really took
-          # effect, otherwise the release artifact would only run on the newest
-          # macOS.
-          if [ "${{ matrix.test }}" = "OFF" ]; then
-            HIGHEST=$(printf '%s\n' 11.0 "$MINOS" | sort -V | tail -1)
-            if [ "$HIGHEST" != "11.0" ]; then
-              echo "::error::release recipe reports minimum macOS $MINOS, expected 11.0 or lower"
-              exit 1
-            fi
-            echo "OK: minimum macOS $MINOS"
+          if [ -z "$MINOS" ]; then
+            echo "::error::cannot read LC_BUILD_VERSION; the binary may be unusable"
+            exit 1
           fi
+          HIGHEST=$(printf '%s\n' 13.3 "$MINOS" | sort -V | tail -1)
+          if [ "$HIGHEST" != "13.3" ]; then
+            echo "::error::binary requires macOS $MINOS, above the expected 13.3; CMAKE_OSX_DEPLOYMENT_TARGET did not take effect"
+            exit 1
+          fi
+          if otool -L build/ctar | grep -q '/opt/homebrew'; then
+            echo "::error::binary depends on Homebrew dynamic libraries; it must only use system libraries"
+            exit 1
+          fi
+          echo "OK: minimum macOS $MINOS, system libraries only"
 
       - name: Test
-        if: matrix.test == 'ON'
         working-directory: build
         run: ctest --output-on-failure
 
       - name: Dump ctest log on failure
-        if: failure() && matrix.test == 'ON'
+        if: failure()
         working-directory: build
         run: cat Testing/Temporary/LastTest.log
