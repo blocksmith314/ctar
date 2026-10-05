@@ -9,23 +9,43 @@ permissions:
   contents: write          # required to create a release
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Linux: build inside an AlmaLinux 8 container, which gives a glibc 2.28
+  # baseline.
+  #
+  # glibc only works "build old, run new", so the baseline is set by the build
+  # container. AlmaLinux 8 was chosen because 2.28 is the lowest baseline still
+  # served by a maintained RHEL-family release with a GCC 14 toolset, and it
+  # covers strictly more systems than building against 2.34 or 2.35:
+  #   RHEL 8 family (2.28), Ubuntu 20.04 (2.31), Debian 11 (2.31),
+  #   RHEL 9 family (2.34), Ubuntu 22.04 (2.35), Debian 12 (2.36)
+  #
+  # Note the ordering surprise that motivated this: RHEL 9 ships glibc 2.34,
+  # which is LOWER than Ubuntu 22.04's 2.35 even though RHEL 9 is newer, so a
+  # binary built on Ubuntu 22.04 cannot run on RHEL 9.
+  #
+  # Why not simply use the ubuntu-22.04 runner: GitHub has announced that image
+  # starts deprecation on 2026-09-17 and is removed by 2027-04; the container
+  # approach is not affected by that schedule.
+  # ---------------------------------------------------------------------------
   build-linux:
     name: linux-x86_64
     runs-on: ubuntu-24.04
-    container: almalinux:9
+    container: almalinux:8
     steps:
       - uses: actions/checkout@v4
 
-      # AlmaLinux 9 does not ship GCC 14 as its default toolchain; gcc-toolset-14
+      # AlmaLinux 8 does not ship GCC 14 as its default toolchain; gcc-toolset-14
       # provides it and installs under /opt/rh, which is NOT on PATH by default.
-      # cmake 3.31 (>= 3.20, enough for CMAKE_CXX_STANDARD 23) is in AppStream.
-      # ninja-build only lives in the CRB repository, which is disabled by
-      # default, so the default Makefiles generator is used instead; make is in
-      # BaseOS.
+      # cmake 3.26 (>= 3.20, enough for CMAKE_CXX_STANDARD 23) is in AppStream.
+      # ninja-build is not reliably available in the enabled repositories, so the
+      # default Makefiles generator is used instead; make is in BaseOS.
       - name: Install toolchain
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             git tar gzip binutils cmake make gcc-toolset-14
+          echo "--- container glibc ---"
+          ldd --version | head -1
           echo "--- toolchain ---"
           /opt/rh/gcc-toolset-14/root/usr/bin/g++ --version | head -1
           cmake --version | head -1
@@ -42,13 +62,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: third-party-almalinux9-${{ hashFiles('CMakeLists.txt') }}
+          key: third-party-almalinux8-${{ hashFiles('CMakeLists.txt') }}
 
       # CMAKE_INSTALL_PREFIX is baked into ctar.pc at configure time, so it is
       # fixed at /usr/local to keep the .pc file consistent with where the
       # package is installed.
       # -static-libstdc++ is required, not optional: gcc-toolset-14's libstdc++
-      # is newer than the one shipped by AlmaLinux 9, so without static linking
+      # is newer than the one shipped by AlmaLinux 8, so without static linking
       # the binary fails with GLIBCXX_3.4.3x not found.
       - name: Configure
         run: >
@@ -69,19 +89,31 @@ jobs:
         run: cmake --install build --prefix "$PWD/stage"
 
       # Enforce the compatibility promise: if a future change raises the glibc
-      # baseline above 2.34, fail the build instead of shipping a binary that
-      # cannot run on RHEL 9.
+      # baseline above 2.28, fail the build instead of shipping a binary that
+      # cannot run on RHEL 8.
+      # The full version list is printed unconditionally so that an unexpected
+      # requirement can be traced to the exact symbols.
       - name: Check glibc baseline
         run: |
-          BASE=$(objdump -T stage/bin/ctar 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "--- container glibc ---"
+          ldd --version | head -1
+
+          echo "--- glibc versions referenced by the binary ---"
+          objdump -T stage/bin/ctar | grep -o 'GLIBC_[0-9.]*' | sort -uV
+
+          BASE=$(objdump -T stage/bin/ctar | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
           echo "minimum glibc required: ${BASE:-none (statically linked)}"
           if [ -n "$BASE" ]; then
-            HIGHEST=$(printf '%s\n' GLIBC_2.34 "$BASE" | sort -V | tail -1)
-            if [ "$HIGHEST" != "GLIBC_2.34" ]; then
-              echo "::error::binary requires $BASE, above GLIBC_2.34 of RHEL 9; it will not run there"
+            HIGHEST=$(printf '%s\n' GLIBC_2.28 "$BASE" | sort -V | tail -1)
+            if [ "$HIGHEST" != "GLIBC_2.28" ]; then
+              echo "--- symbols requiring a version above the baseline ---"
+              objdump -T stage/bin/ctar | grep -E 'GLIBC_2\.(2[9]|3[0-9])' | head -25
+              echo "--- which stage does that symbol come from? ---"
+              file stage/bin/ctar
+              echo "::error::binary requires $BASE, above GLIBC_2.28 of RHEL 8; it will not run there"
               exit 1
             fi
-            echo "OK: not above GLIBC_2.34, runs on RHEL 9+, Ubuntu 22.04+ and Debian 12+"
+            echo "OK: not above GLIBC_2.28, runs on RHEL 8+, Ubuntu 20.04+ and Debian 11+"
           fi
 
       - name: Show runtime dependencies
@@ -111,6 +143,32 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # ---------------------------------------------------------------------------
+  # macOS: system clang with CMAKE_OSX_DEPLOYMENT_TARGET=13.3.
+  #
+  # 13.3 is a hard floor for Apple's libc++: its floating-point std::to_chars is
+  # an OS-exported, availability-annotated symbol
+  # (_LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT, "introduced in macOS 13.3"),
+  # and std::format/std::print instantiate the floating-point formatter
+  # regardless of the argument types -- even
+  #   std::format("{}:{}", std::string, int)
+  # fails to compile below 13.3. That was verified with a minimal program:
+  # -mmacosx-version-min=11.0 and 12.0 both fail, 13.3 and 14.0 both build.
+  #
+  # Using Homebrew GCC instead would avoid that symbol, but it is not viable:
+  # its static libstdc++.a has object files built for newer macOS. Linking it
+  # with -mmacosx-version-min=11.0 "succeeds" but emits 102 warnings of the form
+  #   object file (...libstdc++.a[100](locale_facets.o)) was built for newer
+  #   'macOS' version (26.0) than being linked (11.0)
+  # so the binary would claim 11.0 while embedding objects built for 26.0.
+  #
+  # If CMAKE_OSX_DEPLOYMENT_TARGET is not set, the binary records the runner's
+  # own OS version (measured: minos 26.0), so it would only run on the newest
+  # macOS. The check below guards against that.
+  #
+  # macos-14 is marked deprecated, so macos-26 is used here. The result is an
+  # arm64-only binary: it cannot run on Intel Macs.
+  # ---------------------------------------------------------------------------
   build-macos:
     name: macos-arm64
     runs-on: macos-26          # Apple Silicon; use macos-26-intel for Intel
@@ -230,8 +288,8 @@ jobs:
 
           Platform requirements:
 
-          * `linux-x86_64` — x86_64, glibc 2.34 or newer
-            (RHEL 9 / Rocky 9 / Alma 9, Ubuntu 22.04+, Debian 12+)
+          * `linux-x86_64` — x86_64, glibc 2.28 or newer
+            (RHEL 8 / Rocky 8 / Alma 8 and newer, Ubuntu 20.04+, Debian 11+)
           * `macos-arm64` — Apple Silicon, macOS 13.3 or newer
 
           ### Full package (`.tar.gz`)
