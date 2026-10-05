@@ -9,18 +9,7 @@ permissions:
   contents: write          # required to create a release
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Linux: build inside an Ubuntu 22.04 container so the glibc baseline is 2.35.
-  #
-  # glibc only works "build old, run new". Building directly on the
-  # ubuntu-24.04 runner would require glibc 2.39, which Ubuntu 22.04 (2.35)
-  # cannot satisfy. Building inside an ubuntu:22.04 container produces a binary
-  # that runs on Ubuntu 22.04 and newer.
-  #
-  # Why not simply use the ubuntu-22.04 runner: GitHub has announced that image
-  # starts deprecation on 2026-09-17 and is removed by 2027-04; the container
-  # approach is not affected by that schedule.
-  # ---------------------------------------------------------------------------
+
   build-linux:
     name: linux-x86_64
     runs-on: ubuntu-24.04
@@ -144,7 +133,7 @@ jobs:
   # BUILD_TEST=OFF is required here, not just an optimisation: GCC cannot parse
   # mach/message.h from the macOS 26 SDK (gtest-port.cc includes
   # <mach/mach_init.h>, which pulls it in), so enabling tests would try to build
-  # googletest and fail. Unit tests on macOS are covered by the clang in
+  # googletest and fail. Unit tests on macOS are covered by the clang leg in
   # ci.yaml.
   # ---------------------------------------------------------------------------
   build-macos:
@@ -168,6 +157,11 @@ jobs:
       # -static-libstdc++ is likewise required: otherwise the binary depends on
       # Homebrew's /opt/homebrew/opt/gcc/.../libstdc++.6.dylib and will not run
       # for users who do not have GCC installed.
+      #
+      # -mmacosx-version-min must be passed explicitly: Homebrew GCC does not
+      # honour CMAKE_OSX_DEPLOYMENT_TARGET by itself (measured: minos 26.0, the
+      # runner's own OS), so the flag is supplied through CMAKE_*_FLAGS and
+      # asserted below.
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
@@ -176,10 +170,12 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_INSTALL_PREFIX=/usr/local
           -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          -DCMAKE_C_FLAGS="-mmacosx-version-min=11.0"
+          -DCMAKE_CXX_FLAGS="-mmacosx-version-min=11.0"
           -DBUILD_CLI=ON
           -DBUILD_TEST=OFF
           -DBUILD_BENCHMARKS=OFF
-          -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          -DCMAKE_EXE_LINKER_FLAGS="-mmacosx-version-min=11.0 -static-libstdc++ -static-libgcc"
 
       - name: Build
         run: cmake --build build
@@ -199,9 +195,11 @@ jobs:
             echo "::error::cannot read LC_BUILD_VERSION; the binary may be unusable"
             exit 1
           fi
-          if [ "$MINOS" != "11.0" ]; then
-            echo "::warning::minimum is $MINOS rather than the expected 11.0; adjust CMAKE_OSX_DEPLOYMENT_TARGET accordingly"
+          if [ "$HIGHEST" != "11.0" ]; then
+            echo "::error::binary requires macOS $MINOS or newer, expected 11.0 or lower. Homebrew GCC ignores CMAKE_OSX_DEPLOYMENT_TARGET on its own, so -mmacosx-version-min must be passed explicitly."
+            exit 1
           fi
+          echo "OK: minimum macOS $MINOS"
           if otool -L stage/bin/ctar | grep -q '/opt/homebrew'; then
             echo "::error::binary still depends on Homebrew dynamic libraries; static linking did not take effect"
             exit 1

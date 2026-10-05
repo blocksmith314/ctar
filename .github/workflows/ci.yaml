@@ -15,27 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ---------------------------------------------------------------------------
-  #
-  # 1) macOS + clang  -> runs the unit tests. clang/libc++ can parse the
-  #    macOS 26 SDK headers, so googletest builds.
-  # 2) macOS + GCC 14 -> validates the release recipe only, without googletest.
-  #    GCC cannot parse mach/message.h from the macOS 26 SDK (gtest-port.cc
-  #    includes <mach/mach_init.h>, which pulls it in), producing 21 errors of
-  #    the form "expected constructor, destructor, or type conversion before
-  #    '(' token". The project's own sources do compile with GCC; only
-  #    googletest is affected.
-  #
-  # Why the release build uses GCC instead of clang: in Apple's libc++ the
-  # floating-point std::to_chars is an OS-exported, availability-annotated
-  # symbol (_LIBCPP_AVAILABILITY_TO_CHARS_FLOATING_POINT). Because
-  # std::format/std::print instantiate the floating-point formatter regardless
-  # of the argument types, even
-  #   std::format("{}:{}", std::string, int)
-  # fails to compile with -mmacosx-version-min=11.0. That pins any clang-built
-  # binary to macOS 13.3+. libstdc++ ships its own Ryu-based to_chars that does
-  # not depend on the OS, so only GCC can lower the floor to 11.0.
-  # ---------------------------------------------------------------------------
+
   build-and-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -66,7 +46,7 @@ jobs:
             cc: gcc-14
             cxx: g++-14
             test: 'OFF'
-            extra: '-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"'
+            extra: '-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_C_FLAGS="-mmacosx-version-min=11.0" -DCMAKE_CXX_FLAGS="-mmacosx-version-min=11.0" -DCMAKE_EXE_LINKER_FLAGS="-mmacosx-version-min=11.0 -static-libstdc++ -static-libgcc"'
 
     steps:
       - uses: actions/checkout@v4
@@ -123,8 +103,22 @@ jobs:
       - name: Report platform baseline (macOS)
         if: runner.os == 'macOS'
         run: |
-          otool -l build/ctar | grep -A4 LC_BUILD_VERSION | awk '/minos/{print "minimum macOS:", $2}'
           otool -L build/ctar
+          MINOS=$(otool -l build/ctar | grep -A4 LC_BUILD_VERSION | awk '/minos/{print $2}')
+          echo "minimum macOS: $MINOS"
+          # Homebrew GCC does not pick up CMAKE_OSX_DEPLOYMENT_TARGET on its own
+          # (measured: minos 26.0, i.e. the runner's own OS), so the deployment
+          # flag is passed explicitly via CMAKE_*_FLAGS. Assert it really took
+          # effect, otherwise the release artifact would only run on the newest
+          # macOS.
+          if [ "${{ matrix.test }}" = "OFF" ]; then
+            HIGHEST=$(printf '%s\n' 11.0 "$MINOS" | sort -V | tail -1)
+            if [ "$HIGHEST" != "11.0" ]; then
+              echo "::error::release recipe reports minimum macOS $MINOS, expected 11.0 or lower"
+              exit 1
+            fi
+            echo "OK: minimum macOS $MINOS"
+          fi
 
       - name: Test
         if: matrix.test == 'ON'
