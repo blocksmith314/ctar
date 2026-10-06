@@ -3,10 +3,10 @@ English|[中文](./README_CN.md)
 
 # ctar - an extremely fast packing tool
 
-ctar (Cloud-era Tar) is a modern archiving tool inspired by traditional tar. It is aimed primarily at use cases
-involving massive numbers of small files, makes full use of multithreading when packing to achieve faster packing
-speeds than traditional tar, and is optimized for cloud object storage scenarios. It is especially well suited to
-industries such as AI and autonomous driving that need to process massive amounts of multimodal data.
+ctar (Cloud-era Tar) is a modern archiving tool inspired by traditional tar. It is designed for workloads with huge
+numbers of small files. Packing is fully multithreaded, making it faster than traditional tar, and the resulting
+archive is optimized for cloud object storage. It is a good fit for industries such as AI and autonomous driving
+that process large volumes of multimodal data.
 
 ## Common commands
 
