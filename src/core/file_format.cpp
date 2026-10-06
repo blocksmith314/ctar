@@ -61,7 +61,7 @@ namespace ctar
     {
         assert(file_meta_size >= 4 * unit::KiB - sizeof(PackFileHeader));
         PutFixed32(dst, magic_number);
-        PutFixed32(dst, version.Encode());
+        PutFixed32(dst, file_format_version.Encode());
         PutFixed64(dst, file_meta_size);
     }
 
@@ -74,13 +74,13 @@ namespace ctar
             return error_corruption("Invalid magic number");
         }
         const uint32_t version_number = DecodeFixed32(ptr);
-        version = Version::Decode(version_number);
+        file_format_version = Version::Decode(version_number);
         ptr += sizeof(uint32_t);
         file_meta_size = DecodeFixed64(ptr);
         return {};
     }
 
-    size_t PackFileHeader::SerializedSize() const { return FixedFieldTotalSize(magic_number, version, file_meta_size); }
+    size_t PackFileHeader::SerializedSize() const { return FixedFieldTotalSize(magic_number, file_format_version, file_meta_size); }
 
 
     size_t DataBlockMeta::SerializedSize() const

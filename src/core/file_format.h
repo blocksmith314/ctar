@@ -10,6 +10,7 @@
 #include <unordered_map>
 
 #include "options.h"
+#include "version.h"
 #include "sorted_map.h"
 #include "src/utils/status.h"
 
@@ -45,39 +46,6 @@ namespace ctar
     constexpr uint8_t kListColumnSize = 6;
 
     constexpr uint8_t kTsvColumnSize = 12;
-
-    struct Version
-    {
-        uint8_t major{};
-        uint8_t minor{};
-        uint8_t patch{};
-        uint8_t reserved{};
-
-        constexpr Version() noexcept = default;
-
-        constexpr Version(uint8_t maj, uint8_t min, uint8_t pat) noexcept : major(maj), minor(min), patch(pat) {}
-
-        [[nodiscard]] constexpr uint32_t Encode() const noexcept
-        {
-            return (static_cast<uint32_t>(reserved) << 24U) | (static_cast<uint32_t>(patch) << 16U) |
-                (static_cast<uint32_t>(minor) << 8U) | static_cast<uint32_t>(major);
-        }
-
-        [[nodiscard]] static constexpr Version Decode(const uint32_t ver) noexcept
-        {
-            Version v;
-            v.reserved = static_cast<uint8_t>((ver >> 24U) & 0xFFU);
-            v.patch = static_cast<uint8_t>((ver >> 16U) & 0xFFU);
-            v.minor = static_cast<uint8_t>((ver >> 8U) & 0xFFU);
-            v.major = static_cast<uint8_t>(ver & 0xFFU);
-            return v;
-        }
-
-        [[nodiscard]] std::string to_string() const { return std::format("{}.{}.{}", major, minor, patch); }
-    };
-
-    inline Version cur_version{1, 0, 0};
-
 
     /// @brief Stores calculated maximum column widths for LIST formatted directory output
     struct ListColWidths
@@ -166,7 +134,7 @@ namespace ctar
     struct PackFileHeader
     {
         uint32_t magic_number = MagicNumber;
-        Version version = cur_version;
+        Version file_format_version = kFileFormatVersion;
         uint64_t file_meta_size = 0;
         PackFileHeader() = default;
         void Serialize(std::string* dst) const;

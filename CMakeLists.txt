@@ -1,7 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
-project(ctar VERSION 1.0.0 LANGUAGES C CXX)
+include(cmake/utils.cmake)
 
-MESSAGE(STATUS "PROJECT_NAME ${PROJECT_NAME}")
+ctar_extract_version()
+
+
+
+project(ctar VERSION ${CTAR_VERSION} LANGUAGES C CXX)
+
+message(STATUS "${PROJECT_NAME} ${CTAR_VERSION} (file format ${CTAR_FORMAT_VERSION})")
+
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -311,7 +318,13 @@ install(FILES
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
 )
 
-# ========= pkg‑config .pc file =========
+install(FILES
+        ${PROJECT_SOURCE_DIR}/LICENSE
+        ${PROJECT_SOURCE_DIR}/NOTICE
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/${PROJECT_NAME}
+)
+
+# ========= pkg-config .pc file =========
 set(prefix "${CMAKE_INSTALL_PREFIX}")
 set(exec_prefix "\${prefix}")
 set(libdir "\${exec_prefix}/${CMAKE_INSTALL_LIBDIR}")

@@ -29,7 +29,7 @@ namespace ctar
         PackFileHeader file_header;
         file_header.file_meta_size = file_meta_size;
         ASSERT_EQ(file_header.magic_number, MagicNumber);
-        ASSERT_EQ(file_header.version.Encode(), cur_version.Encode());
+        ASSERT_EQ(file_header.file_format_version.Encode(), kFileFormatVersion.Encode());
         ASSERT_EQ(file_header.file_meta_size, file_meta_size);
         std::string buf;
         file_header.Serialize(&buf);
@@ -40,7 +40,7 @@ namespace ctar
         Status s = deser_file_header.Deserialize(p);
         ASSERT_TRUE(s);
         ASSERT_EQ(deser_file_header.magic_number, MagicNumber);
-        ASSERT_EQ(deser_file_header.version.Encode(), cur_version.Encode());
+        ASSERT_EQ(deser_file_header.file_format_version.Encode(), kFileFormatVersion.Encode());
         ASSERT_EQ(deser_file_header.file_meta_size, file_meta_size);
     }
 

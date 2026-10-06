@@ -272,6 +272,38 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The artifact filenames already contain the tag, so the only meaningful
+      # cross-check is between the tag and the version baked into the build.
+      # ctar.pc is read instead of parsing `ctar --version`, so the check does
+      # not depend on the CLI output format. The path is globbed because
+      # CMAKE_INSTALL_LIBDIR is lib64 on RHEL-family systems and lib elsewhere.
+      - name: Check tag matches the packaged version
+        working-directory: dist
+        run: |
+          TARBALL=$(ls ctar-*-linux-x86_64.tar.gz)
+          PC=$(tar -tzf "$TARBALL" | grep -E '(^|/)ctar\.pc$' | head -1)
+          if [ -z "$PC" ]; then
+            echo "::error::no ctar.pc inside ${TARBALL}"
+            exit 1
+          fi
+          VERSION=$(tar -xzOf "$TARBALL" "$PC" | sed -n 's/^Version: *//p')
+          echo "packaged version: ${VERSION}"
+          echo "tag:              ${GITHUB_REF_NAME}"
+          if [ "v${VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the packaged version ${VERSION}"
+            exit 1
+          fi
+
+      # The only step that executes the final downloaded artifact. The build
+      # jobs smoke test their own build tree; this one tests what users get.
+      - name: Smoke test the released binary
+        working-directory: dist
+        run: |
+          BIN=$(ls ctar-*-linux-x86_64)
+          chmod +x "$BIN"
+          ./"$BIN" --version
+          ./"$BIN" --help > /dev/null
+
       - name: Generate checksums
         working-directory: dist
         run: |

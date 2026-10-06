@@ -325,7 +325,10 @@ namespace ctar
             EXPECT_TRUE(result_status);
         }
         std::string version = output_buf.str();
-        ASSERT_TRUE(version.contains("version"));
+        ASSERT_TRUE(version.contains("ctar"));
+        ASSERT_TRUE(version.contains(kToolVersion.to_string()));
+        ASSERT_TRUE(version.contains("file format"));
+        ASSERT_TRUE(version.contains(kFileFormatVersion.to_string()));
     }
 
     TEST(CommandTest, HASH)

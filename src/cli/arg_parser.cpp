@@ -2,8 +2,8 @@
 #include <iostream>
 #include <xxhash.h>
 
-#include "src/cli/arg_parser.h"
 #include "api/ctar.h"
+#include "src/cli/arg_parser.h"
 
 
 namespace
@@ -491,7 +491,8 @@ namespace ctar::cli
             break;
         case CommandType::VERSION:
             {
-                std::println(std::cout, "cli version: {}", cur_version.to_string());
+                std::println(std::cout, "ctar : {} (file format)", kToolVersion.to_string(),
+                             kFileFormatVersion.to_string());
             }
             break;
         case CommandType::HASH:
@@ -520,7 +521,7 @@ namespace ctar::cli
                 Status status = store.RestoreBlocksFromPack(opt.pack_file_path);
                 if (status)
                 {
-                    return  store.GetFileStats();
+                    return store.GetFileStats();
                 }
                 else
                 {
