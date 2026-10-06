@@ -318,6 +318,12 @@ install(FILES
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
 )
 
+install(FILES
+        ${PROJECT_SOURCE_DIR}/LICENSE
+        ${PROJECT_SOURCE_DIR}/NOTICE
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/${PROJECT_NAME}
+)
+
 # ========= pkg-config .pc file =========
 set(prefix "${CMAKE_INSTALL_PREFIX}")
 set(exec_prefix "\${prefix}")
