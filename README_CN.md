@@ -110,6 +110,8 @@ compressed ratio: 30.16%, Throughput: 61.5K/s
 
 ```shell
 > ctar unpack pack_file.ctar output_dir
+file count: 10, total bytes: 630, compressed bytes: 190, padding bytes: 20290, elapsed time 1 ms
+compressed ratio: 30.16%, Throughput: 615.2K/s
 ```
 
 - 利用多线程进行解包，会将打包的整个目录解压到 `output_dir` 中
