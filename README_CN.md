@@ -1,10 +1,56 @@
-中文|[English](./README.md)
+中文 | [English](./README.md)
 
 # ctar - 非常快速的打包工具
 
-ctar（Cloud-era Tar）是一款受传统 tar 启发的现代归档工具，主要面向海量小文件的使用场景，充分利用多线程进行打包，相比传统 tar
-有更快的打包速度，
-并针对云对象存储的使用场景进行了优化，特别适用于 AI、自动驾驶等需要处理海量多模态数据的行业。
+ctar（Cloud-era Tar）是一款受传统 tar 启发的现代归档工具，主要面向海量小文件的使用场景，充分利用多线程进行打包，相比传统 tar 有更快的打包速度，并针对云对象存储的使用场景进行了优化，特别适用于 AI、自动驾驶等需要处理海量多模态数据的行业。
+
+## 核心功能
+
+- **多线程打包与解包** —— 默认使用全部 CPU 核心，可以指定线程数，文件越多收益越明显
+- **按文件随机读取** —— 归档内每个文件的偏移都记录在索引中，可以只读取单个文件或一批文件，无需下载或解压整个归档
+- **面向云对象存储的布局** —— 同一目录的文件集中存放，便于按块拉取与并发读取
+- **可选压缩** —— `lz4`（默认，偏向速度）、`lz4hc`（偏向压缩率）、`none`（不压缩）；`jpeg`、`png`、`parquet` 等已压缩格式自动跳过
+- **可调的压缩参数** —— 可以控制 lz4 加速因子或 lz4hc 压缩级别
+- **完整保留文件元数据** —— 权限、属主、属组、修改时间
+- **归档与本地目录皆可查看** —— `tree` 打印目录树，`ls` 列出元信息，`dump` 导出可过滤的 TSV 索引
+
+更多功能可用 `--help` 查看。
+
+## 安装
+
+### 预编译二进制
+
+从 [Releases](https://github.com/blocksmith314/ctar/releases) 页面下载对应平台的产物：
+
+| 平台 | 独立可执行文件 |
+|---|---|
+| Linux x86_64 | `ctar-<版本>-linux-x86_64` |
+| macOS arm64 | `ctar-<版本>-macos-arm64` |
+
+> **macOS 要求**：需要 macOS **13.3 及以上**，且必须为 Apple Silicon。
+
+```shell
+VERSION=v1.0.0
+BASE=https://github.com/blocksmith314/ctar/releases/download/$VERSION
+
+curl -sSL -O "$BASE/ctar-$VERSION-linux-x86_64"
+curl -sSL -O "$BASE/SHA256SUMS"
+
+# 校验下载完整性
+sha256sum -c --ignore-missing SHA256SUMS
+
+chmod +x ctar-$VERSION-linux-x86_64
+sudo mv ctar-$VERSION-linux-x86_64 /usr/local/bin/ctar
+ctar --help
+```
+
+> **macOS 用户注意**：浏览器下载的二进制会被 Gatekeeper 拦截，提示「Apple 无法验证……是否包含恶意软件」。这不是病毒告警，而是该产物未做 Apple 开发者签名与公证。清除隔离标记即可：
+>
+> ```shell
+> xattr -d com.apple.quarantine ./ctar-$VERSION-macos-arm64
+> ```
+>
+> 或者改用 `curl` 下载 —— 它不会写入隔离标记。
 
 ## 常用命令
 
@@ -25,11 +71,11 @@ ctar ls pack_file.ctar
 ctar dump pack_file.ctar
 ```
 
-一般情况下，使用 `pack` 和 `unpack` 命令即可满足大部分的需求，文件越多收益越明显。如果有其他需求，如将打包后的文件放在云端，但只想获取打包文件中的部分数据时，可参考下面的简短教程
+一般情况下，使用 `pack` 和 `unpack` 命令即可满足大部分的需求，文件越多收益越明显。如果有其他需求，如将打包后的文件放在云端，但只想获取打包文件中的部分数据时，可参考下面的简短教程。
 
 ## 简短教程
 
-假设一个目录下有如下文件
+假设一个目录下有如下文件：
 
 ```shell
 input_dir/config/device/file2.txt
@@ -58,12 +104,14 @@ compressed ratio: 30.16%, Throughput: 61.5K/s
 - `compressed bytes` 目录下压缩文件的字节总数
 - `elapsed time` 总耗时，单位总是毫秒
 - `compressed ratio` 压缩率，计算公式 `compressed bytes`/`total bytes`
-- `Throughput` 吞吐，计算公式 `total_original_size`/`elapsed time`
+- `Throughput` 吞吐，计算公式 `total bytes`/`elapsed time`
 
 ### 解包
 
 ```shell
 > ctar unpack pack_file.ctar output_dir
+file count: 10, total bytes: 630, compressed bytes: 190, padding bytes: 20290, elapsed time 1 ms
+compressed ratio: 30.16%, Throughput: 615.2K/s
 ```
 
 - 利用多线程进行解包，会将打包的整个目录解压到 `output_dir` 中
@@ -142,9 +190,9 @@ block_id	dir_id	file_id	permissions	owner	group	modify_time	offset	original_size
 4	10	10	420	odyssey	staff	1791124062504	8211	63	19	input_dir/resource/bin	file6.bin
 ```
 
-- 第 1 列：文件所属 block 的 id, 打包时会根据文件夹中文件的分布来将文件打包到不同的 block 中，block 的 id 从 0 开始自增
-- 第 2 列：文件所属目录的 id, 对打包文件夹进行扫描时，会为每个文件夹分配一个 id, 从 1 开始自增
-- 第 3 列：文件的 id, 对打包文件夹进行扫描时，会为每个文件分配一个 id, 从 1 开始自增
+- 第 1 列：文件所属 block 的 id，打包时会根据文件夹中文件的分布来将文件打包到不同的 block 中，block 的 id 从 0 开始自增
+- 第 2 列：文件所属目录的 id，对打包文件夹进行扫描时，会为每个文件夹分配一个 id, 从 1 开始自增
+- 第 3 列：文件的 id，对打包文件夹进行扫描时，会为每个文件分配一个 id, 从 1 开始自增
 - 第 4 列：文件的权限值，Unix 文件权限模型
 - 第 5 列：owner，文件属主
 - 第 6 列：group，文件属组
@@ -160,8 +208,8 @@ block_id	dir_id	file_id	permissions	owner	group	modify_time	offset	original_size
 #### 注意
 
 1. 可以根据 block_id 的所有文件计算出整个 block 的开始位置和大小，从而一次性的读取整个 block，如果将打包文件存储在云端，这种方法可以加快获取文件的速度
-2. 默认压缩算法为 lz4, 偏向于更快的处理速度。如果希望更高的压缩率，可以设置压缩算法为 lz4hc, 并调整压缩级别
-3. 压缩文件时，对于常见的已压缩的文件不会进行压缩，如 parquet, jpeg 等
+2. 默认压缩算法为 `lz4`，偏向于更快的处理速度。如果希望更高的压缩率，可以用 `ctar pack -c lz4hc` 指定 `lz4hc`，并通过 `-p` 调整压缩级别
+3. 压缩文件时，对于常见的已压缩的文件不会进行压缩，如 `parquet`、`jpeg` 等
 
 #### 查看指定目录的文件的元信息和文件的索引信息
 
@@ -190,9 +238,16 @@ block_id	dir_id	file_id	permissions	owner	group	modify_time	offset	original_size
 ```
 
 ## 文件格式设计
- 如果你想了解打包文件的格式设计，请参考[文件格式设计](./doc/file_format_CN.md)
 
-## 构建
+如果你想了解打包文件的格式设计，请参考[文件格式设计](./doc/file_format_CN.md)。
+
+## 从源码构建
+
+| 依赖 | 要求 |
+|---|---|
+| CMake | **3.20** 及以上 |
+| 编译器 | **GCC 14+** 或 **Clang 18+** |
+| git | 任意较新版本 |
 
 ```shell
 git clone -b main --single-branch --depth 1 https://github.com/blocksmith314/ctar.git
@@ -203,6 +258,8 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build .
 cmake --install . # --prefix ./user_defined_install_path
 ```
+
+**暂不支持**：Windows、Intel Mac、arm64 Linux、glibc 低于 2.28 的系统（如 CentOS 7），以及使用 musl 的系统（如 Alpine）。
 
 ## License
 

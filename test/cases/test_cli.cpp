@@ -8,12 +8,33 @@
 
 namespace ctar
 {
-    TEST(ArgParserTest, NoSubCommandReturnsHelp)
+
+    TEST(ArgParserTest, NoSubCommand)
     {
         cli::CliOption opt{};
         const std::vector<std::string_view> args{"ctar"};
         auto status = cli::ParseArgs(args, opt);
         EXPECT_FALSE(status);
+        EXPECT_TRUE(status.error().err_message.contains("no command specified"));
+    }
+
+    TEST(ArgParserTest, HELP)
+    {
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "help"};
+            auto status = cli::ParseArgs(args, opt);
+            EXPECT_TRUE(status);
+            EXPECT_EQ(opt.cmd, cli::CommandType::HELP);
+        }
+
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "--help"};
+            auto status = cli::ParseArgs(args, opt);
+            EXPECT_TRUE(status);
+            EXPECT_EQ(opt.cmd, cli::CommandType::HELP);
+        }
     }
 
     TEST(ArgParserTest, VERSION)
@@ -48,6 +69,7 @@ namespace ctar
             const std::vector<std::string_view> args{"ctar", "hash", "-f"};
             status = cli::ParseArgs(args, opt);
             EXPECT_FALSE(status);
+            EXPECT_TRUE(status.error().err_message.contains("missing arguments"));
         }
     }
 
@@ -78,9 +100,9 @@ namespace ctar
     {
         cli::CliOption opt{};
         const std::vector<std::string_view> args{"ctar", "pack", "./src", "out.ctar"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.cmd, cli::CommandType::PACK);
         EXPECT_EQ(opt.source_path, "./src");
         EXPECT_EQ(opt.output_path, "out.ctar");
@@ -90,9 +112,9 @@ namespace ctar
     {
         cli::CliOption opt{};
         const std::vector<std::string_view> args{"ctar", "pack", "-c", "none", "./src", "out.ctar"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.cmd, cli::CommandType::PACK);
         EXPECT_EQ(opt.source_path, "./src");
         EXPECT_EQ(opt.output_path, "out.ctar");
@@ -104,26 +126,52 @@ namespace ctar
         {
             cli::CliOption opt{};
             const std::vector<std::string_view> args{"ctar", "pack", "-c", "lz4", "-p", "10", "./src", "out.ctar"};
-            auto ok = cli::ParseArgs(args, opt);
+            auto status = cli::ParseArgs(args, opt);
 
-            EXPECT_TRUE(ok);
+            EXPECT_TRUE(status);
             EXPECT_EQ(opt.cmd, cli::CommandType::PACK);
             EXPECT_EQ(opt.source_path, "./src");
             EXPECT_EQ(opt.output_path, "out.ctar");
             EXPECT_EQ(opt.comp_config.compression_type, CompressionType::kLZ4);
             EXPECT_EQ(opt.comp_config.compression_param, 10);
         }
+
         {
             cli::CliOption opt{};
             const std::vector<std::string_view> args{"ctar", "pack", "-c", "lz4", "./src", "out.ctar"};
-            auto ok = cli::ParseArgs(args, opt);
+            auto status = cli::ParseArgs(args, opt);
 
-            EXPECT_TRUE(ok);
+            EXPECT_TRUE(status);
             EXPECT_EQ(opt.cmd, cli::CommandType::PACK);
             EXPECT_EQ(opt.source_path, "./src");
             EXPECT_EQ(opt.output_path, "out.ctar");
             EXPECT_EQ(opt.comp_config.compression_type, CompressionType::kLZ4);
             EXPECT_EQ(opt.comp_config.compression_param, kLZ4AccDefault);
+        }
+
+        {
+            cli::CliOption opt{};
+            std::vector<std::string_view> args{"ctar", "pack", "-p", "10", "./src", "out.ctar"};
+            auto status = cli::ParseArgs(args, opt);
+            ASSERT_EQ(opt.comp_config.compression_type, CompressionType::kLZ4);
+            EXPECT_TRUE(status);
+        }
+
+        {
+            cli::CliOption opt{};
+            std::vector<std::string_view> args{"ctar", "pack", "-t", "10", "-p", "10", "./src", "out.ctar"};
+            auto status = cli::ParseArgs(args, opt);
+            ASSERT_EQ(opt.comp_config.compression_type, CompressionType::kLZ4);
+            EXPECT_TRUE(status);
+        }
+
+        {
+            cli::CliOption opt{};
+            std::vector<std::string_view> args{"ctar", "pack", "-t",  "10",    "-c",
+                                               "lz4",  "-p",   "100", "./src", "out.ctar"};
+            auto status = cli::ParseArgs(args, opt);
+            ASSERT_EQ(opt.comp_config.compression_type, CompressionType::kLZ4);
+            EXPECT_TRUE(status);
         }
     }
 
@@ -132,9 +180,9 @@ namespace ctar
         {
             cli::CliOption opt{};
             const std::vector<std::string_view> args{"ctar", "pack", "-c", "lz4hc", "-p", "10", "./src", "out.ctar"};
-            auto ok = cli::ParseArgs(args, opt);
+            auto status = cli::ParseArgs(args, opt);
 
-            EXPECT_TRUE(ok);
+            EXPECT_TRUE(status);
             EXPECT_EQ(opt.cmd, cli::CommandType::PACK);
             EXPECT_EQ(opt.source_path, "./src");
             EXPECT_EQ(opt.output_path, "out.ctar");
@@ -145,44 +193,88 @@ namespace ctar
         {
             cli::CliOption opt{};
             const std::vector<std::string_view> args{"ctar", "pack", "-c", "lz4hc", "./src", "out.ctar"};
-            auto ok = cli::ParseArgs(args, opt);
+            auto status = cli::ParseArgs(args, opt);
 
-            EXPECT_TRUE(ok);
+            EXPECT_TRUE(status);
             EXPECT_EQ(opt.cmd, cli::CommandType::PACK);
             EXPECT_EQ(opt.source_path, "./src");
             EXPECT_EQ(opt.output_path, "out.ctar");
             EXPECT_EQ(opt.comp_config.compression_type, CompressionType::kLZ4HC);
             EXPECT_EQ(opt.comp_config.compression_param, kLZ4HCDefault);
         }
+
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "pack", "-c", "lz4hc", "-p", "13", "./src", "out.ctar"};
+            auto status = cli::ParseArgs(args, opt);
+            EXPECT_FALSE(status);
+            EXPECT_THROW(status.value(), std::bad_expected_access<ctar::ErrorStatus>);
+            EXPECT_EQ(status.error().err_type, ErrorType::kInvalidArgument);
+        }
     }
 
     TEST(ArgParserTest, CommandPackMissingArgument)
     {
-        cli::CliOption opt{};
-        std::vector<std::string_view> args{"ctar", "pack", "./src"};
-        auto ok = cli::ParseArgs(args, opt);
-        EXPECT_FALSE(ok);
+        {
+            cli::CliOption opt{};
+            std::vector<std::string_view> args{"ctar", "pack", "./src"};
+            auto status = cli::ParseArgs(args, opt);
+            EXPECT_FALSE(status);
+            EXPECT_EQ(status.error().err_type, ErrorType::kInvalidArgument);
+            EXPECT_TRUE(status.error().err_message.contains("missing arguments"));
+        }
+
+        {
+            cli::CliOption opt{};
+            std::vector<std::string_view> args{"ctar", "pack", "out.ctar"};
+            auto status = cli::ParseArgs(args, opt);
+            EXPECT_FALSE(status);
+            EXPECT_EQ(status.error().err_type, ErrorType::kInvalidArgument);
+            EXPECT_TRUE(status.error().err_message.contains("missing arguments"));
+        }
+
+        {
+            cli::CliOption opt{};
+            std::vector<std::string_view> args{"ctar", "pack", "-p", "a", "input", "out.ctar"};
+            auto status = cli::ParseArgs(args, opt);
+            EXPECT_FALSE(status);
+            EXPECT_EQ(status.error().err_type, ErrorType::kInvalidArgument);
+            EXPECT_TRUE(status.error().err_message.contains("invalid compression param"));
+        }
     }
 
     TEST(ArgParserTest, CommandUnpackValid)
     {
-        cli::CliOption opt{};
-        std::vector<std::string_view> args{"ctar", "unpack", "xxx.ctar", "./outdir"};
-        auto ok = cli::ParseArgs(args, opt);
+        {
+            cli::CliOption opt{};
+            std::vector<std::string_view> args{"ctar", "unpack", "xxx.ctar", "./outdir"};
+            auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
-        EXPECT_EQ(opt.cmd, cli::CommandType::UNPACK);
-        EXPECT_EQ(opt.source_path, "xxx.ctar");
-        EXPECT_EQ(opt.output_path, "./outdir");
+            EXPECT_TRUE(status);
+            EXPECT_EQ(opt.cmd, cli::CommandType::UNPACK);
+            EXPECT_EQ(opt.source_path, "xxx.ctar");
+            EXPECT_EQ(opt.output_path, "./outdir");
+        }
+
+        {
+            cli::CliOption opt{};
+            std::vector<std::string_view> args{"ctar", "unpack", "-t", "10", "xxx.ctar", "./outdir"};
+            auto status = cli::ParseArgs(args, opt);
+            EXPECT_TRUE(status);
+            EXPECT_EQ(opt.thread_cnt, 10);
+            EXPECT_EQ(opt.cmd, cli::CommandType::UNPACK);
+            EXPECT_EQ(opt.source_path, "xxx.ctar");
+            EXPECT_EQ(opt.output_path, "./outdir");
+        }
     }
 
     TEST(ArgParserTest, TreeLocalDirectory)
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "tree", "docs"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.cmd, cli::CommandType::TREE);
         EXPECT_EQ(opt.specified_path, "docs");
         EXPECT_TRUE(opt.pack_file_path.empty());
@@ -192,9 +284,9 @@ namespace ctar
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "tree", "docs/"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.specified_path, "docs");
     }
 
@@ -207,9 +299,9 @@ namespace ctar
             "test.ctar",
             "inner_dir",
         };
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.cmd, cli::CommandType::TREE);
         EXPECT_EQ(opt.specified_path, "inner_dir");
         EXPECT_EQ(opt.pack_file_path, "test.ctar");
@@ -219,17 +311,17 @@ namespace ctar
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "tree", "-z"};
-        auto ok = cli::ParseArgs(args, opt);
-        EXPECT_FALSE(ok);
+        auto status = cli::ParseArgs(args, opt);
+        EXPECT_FALSE(status);
     }
 
     TEST(ArgParserTest, LsArchiveOnly)
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "ls", "demo.ctar"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.cmd, cli::CommandType::LS);
         EXPECT_EQ(opt.pack_file_path, "demo.ctar");
         EXPECT_FALSE(opt.enable_human_readable);
@@ -239,9 +331,9 @@ namespace ctar
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "ls", "-h", "demo.ctar"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_TRUE(opt.enable_human_readable);
         EXPECT_EQ(opt.pack_file_path, "demo.ctar");
     }
@@ -250,9 +342,9 @@ namespace ctar
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "ls", "demo.ctar", "data/"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.specified_path, "data");
         EXPECT_EQ(opt.pack_file_path, "demo.ctar");
     }
@@ -261,9 +353,9 @@ namespace ctar
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "dump", "demo.ctar"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.cmd, cli::CommandType::DUMP);
         EXPECT_TRUE(opt.dump_file_path.empty());
     }
@@ -272,9 +364,9 @@ namespace ctar
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "dump", "-o", "out.tsv", "demo.ctar"};
-        auto ok = cli::ParseArgs(args, opt);
+        auto status = cli::ParseArgs(args, opt);
 
-        EXPECT_TRUE(ok);
+        EXPECT_TRUE(status);
         EXPECT_EQ(opt.dump_file_path, "out.tsv");
         EXPECT_EQ(opt.pack_file_path, "demo.ctar");
     }
@@ -283,16 +375,16 @@ namespace ctar
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "dump", "-o"};
-        auto ok = cli::ParseArgs(args, opt);
-        EXPECT_FALSE(ok);
+        auto status = cli::ParseArgs(args, opt);
+        EXPECT_FALSE(status);
     }
 
     TEST(ArgParserTest, UnknownCommand)
     {
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "foobar"};
-        auto ok = cli::ParseArgs(args, opt);
-        EXPECT_FALSE(ok);
+        auto status = cli::ParseArgs(args, opt);
+        EXPECT_FALSE(status);
     }
 
 
@@ -366,15 +458,15 @@ namespace ctar
             std::vector<std::string_view> args{"ctar", "stat", arg_pack_file};
             auto status = ParseArgs(args, opt);
             EXPECT_TRUE(status);
+            std::ostringstream output_buf;
             {
+                test::CoutRedirectGuard redirect(output_buf);
                 auto result_status = cli::RunCommand(opt);
-                EXPECT_TRUE(result_status);
-                auto file_stats = result_status.value();
-                ASSERT_EQ(file_stats.total_file_count, generator_file_cnt);
-                ASSERT_EQ(file_stats.total_original_size, generator_file_size);
-                ASSERT_LT(file_stats.total_compressed_size, generator_file_size);
-                ASSERT_GT(file_stats.padding_size, 0);
+                ASSERT_TRUE(result_status) << "stat command run failed";
             }
+            std::string stat_text = output_buf.str();
+            ASSERT_TRUE(stat_text.contains(std::format("file count: {}",generator_file_cnt)));
+            ASSERT_TRUE(stat_text.contains(std::format("total bytes: {}",generator_file_size)));
         }
     }
 
@@ -397,15 +489,16 @@ namespace ctar
         cli::CliOption opt{};
         std::vector<std::string_view> args{"ctar", "pack", "-c", "none", arg_source, arg_pack_file};
         auto status = ParseArgs(args, opt);
-
         EXPECT_TRUE(status);
-        auto result_status = cli::RunCommand(opt);
-        EXPECT_TRUE(result_status);
-        auto file_stats = result_status.value();
-        ASSERT_EQ(file_stats.total_file_count, generator_file_cnt);
-        ASSERT_EQ(file_stats.total_original_size, generator_file_size);
-        ASSERT_EQ(file_stats.total_compressed_size, generator_file_size);
-        ASSERT_GT(file_stats.padding_size, 0);
+        std::ostringstream output_buf;
+        {
+            test::CoutRedirectGuard redirect(output_buf);
+            auto result_status = cli::RunCommand(opt);
+            EXPECT_TRUE(result_status);
+        }
+        std::string pack_text = output_buf.str();
+        ASSERT_TRUE(pack_text.contains(std::format("file count: {}",generator_file_cnt)));
+        ASSERT_TRUE(pack_text.contains(std::format("total bytes: {}",generator_file_size)));
     }
 
     TEST_F(CommandPresetFileTest, UnPack)
@@ -453,7 +546,6 @@ namespace ctar
             test::CoutRedirectGuard redirect(output_buf);
             result_status = cli::RunCommand(tree_opt);
             ASSERT_TRUE(result_status) << "tree command run failed";
-            ;
         }
 
         std::string tree_text = output_buf.str();

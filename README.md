@@ -1,12 +1,62 @@
-English|[中文](./README_CN.md)
-
+English | [中文](./README_CN.md)
 
 # ctar - an extremely fast packing tool
 
-ctar (Cloud-era Tar) is a modern archiving tool inspired by traditional tar. It is designed for workloads with huge
-numbers of small files. Packing is fully multithreaded, making it faster than traditional tar, and the resulting
-archive is optimized for cloud object storage. It is a good fit for industries such as AI and autonomous driving
-that process large volumes of multimodal data.
+ctar (Cloud-era Tar) is a modern archiving tool inspired by traditional tar.
+It is designed for workloads with huge numbers of small files.
+Packing is fully multithreaded, making it faster than traditional tar, and the resulting archive is optimized for cloud object storage.
+It is a good fit for industries such as AI and autonomous driving that process large volumes of multimodal data.
+
+## Core features
+
+- **Multithreaded packing and unpacking** — uses all CPU cores by default; the thread count can be configured, and the more files there are the bigger the win
+- **Per-file random access** — every file's offset is recorded in the index, so a single file or a batch of files can be read without downloading or extracting the whole archive
+- **A layout built for cloud object storage** — the files of one directory are stored together, which makes block-level fetching and parallel reads cheap
+- **Optional compression** — `lz4` (default, favours speed), `lz4hc` (favours ratio) or `none`; already-compressed formats such as `jpeg`, `png` and `parquet` are skipped
+- **Tunable compression** — the lz4 acceleration factor or the lz4hc compression level can be set
+- **Full metadata preservation** — permissions, owner, group and modification time
+- **Inspect archives and local directories alike** — `tree` prints the directory tree, `ls` lists metadata, `dump` exports a filterable TSV index
+
+Run `ctar --help` for the rest.
+
+## Installation
+
+### Prebuilt binaries
+
+Download the artifact for your platform from the [releases page](https://github.com/blocksmith314/ctar/releases):
+
+| Platform | Standalone executable |
+|---|---|
+| Linux x86_64 | `ctar-<version>-linux-x86_64` |
+| macOS arm64 | `ctar-<version>-macos-arm64` |
+
+> **macOS requirement**: macOS **13.3 or newer**, on Apple Silicon.
+
+```shell
+VERSION=v1.0.0
+BASE=https://github.com/blocksmith314/ctar/releases/download/$VERSION
+
+curl -sSL -O "$BASE/ctar-$VERSION-linux-x86_64"
+curl -sSL -O "$BASE/SHA256SUMS"
+
+# verify the download
+sha256sum -c --ignore-missing SHA256SUMS
+
+chmod +x ctar-$VERSION-linux-x86_64
+sudo mv ctar-$VERSION-linux-x86_64 /usr/local/bin/ctar
+ctar --help
+```
+
+> **macOS**: a binary downloaded through a browser is blocked by Gatekeeper with
+> "Apple cannot check it for malicious software". That is not a malware warning —
+> the artifact is simply not signed with an Apple Developer ID or notarized.
+> Clear the quarantine attribute to run it:
+>
+> ```shell
+> xattr -d com.apple.quarantine ./ctar-$VERSION-macos-arm64
+> ```
+>
+> Downloading with `curl` instead avoids the attribute altogether.
 
 ## Common commands
 
@@ -63,12 +113,14 @@ compressed ratio: 30.16%, Throughput: 61.5K/s
 - `compressed bytes`: the total number of bytes of the compressed files in the directory
 - `elapsed time`: total elapsed time; the unit is always milliseconds
 - `compressed ratio`: compression ratio, computed as `compressed bytes` / `total bytes`
-- `Throughput`: throughput, computed as `total_original_size` / `elapsed time`
+- `Throughput`: throughput, computed as `total bytes` / `elapsed time`
 
 ### Unpacking
 
 ```shell
 > ctar unpack pack_file.ctar output_dir
+file count: 10, total bytes: 630, compressed bytes: 190, padding bytes: 20290, elapsed time 1 ms
+compressed ratio: 30.16%, Throughput: 615.2K/s
 ```
 
 - Unpacks using multiple threads, restoring the entire packed directory into `output_dir`
@@ -168,7 +220,7 @@ pack file.
 1. The start position and size of an entire block can be worked out from all the files sharing a `block_id`, so the
    whole block can be read in one shot. If the pack file is stored in the cloud, this approach speeds up file retrieval
 2. The default compression algorithm is `lz4`, which favors faster processing speed. If a higher compression ratio is
-   desired, the compression algorithm can be set to `lz4hc` and the compression level adjusted
+   desired, pass `ctar pack -c lz4hc` to use `lz4hc` and tune the level with `-p`
 3. When compressing files, commonly seen already-compressed files such as `parquet` and `jpeg` are left uncompressed
 
 #### Viewing metadata and index information for files in a specified directory
@@ -198,9 +250,16 @@ block_id	dir_id	file_id	permissions	owner	group	modify_time	offset	original_size
 ```
 
 ## File format design
+
 If you want to understand the design of the pack file format, see [File format design](./doc/file_format.md).
 
-## Build
+## Building from source
+
+| Dependency | Requirement |
+|---|---|
+| CMake | **3.20** or newer |
+| Compiler | **GCC 14+** or **Clang 18+** |
+| git | any recent version |
 
 ```shell
 git clone -b main --single-branch --depth 1 https://github.com/blocksmith314/ctar.git
@@ -211,6 +270,9 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build .
 cmake --install . # --prefix ./user_defined_install_path
 ```
+
+**Not supported**: Windows, Intel Macs, arm64 Linux, systems with glibc older than 2.28 (such as CentOS 7), and
+musl-based distributions such as Alpine.
 
 ## License
 
