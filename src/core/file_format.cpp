@@ -65,6 +65,7 @@ namespace ctar
         PutFixed64(dst, file_meta_size);
     }
 
+    // TODO: Magic number validation here is not appropriate.
     Status PackFileHeader::Deserialize(const char*& ptr)
     {
         magic_number = DecodeFixed32(ptr);
