@@ -6,7 +6,7 @@ int main(int argc, char** argv)
     ctar::cli::CliOption opt{};
     if (auto s = ctar::cli::ParseArgs(argc, argv, opt); !s)
     {
-        std::println("{}", s.error().err_message);
+        std::println(std::cout,"{}", s.error().err_message);
         ctar::cli::PrintHelp();
         return EXIT_FAILURE;
     }
