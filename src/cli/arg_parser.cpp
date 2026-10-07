@@ -4,6 +4,7 @@
 
 #include "api/ctar.h"
 #include "src/cli/arg_parser.h"
+#include "src/utils/tools.h"
 
 
 namespace
@@ -96,7 +97,7 @@ EXAMPLES
     ctar dump -H -o meta.tsv archive.ctar
     ctar dump -H -o meta.tsv archive.ctar sub/dir
     ctar hash hello
-    ctar -f xx.txt
+    ctar hash -f xx.txt
 
 TSV COLUMNS (dump), in order
     block_id  dir_id  file_id  permissions  owner  group  modify_time
@@ -112,7 +113,7 @@ namespace ctar::cli
 {
     void PrintHelp() { std::cout << kUsageText; }
 
-    inline std::string TrimTrailingSlash(std::string_view path)
+    std::string TrimTrailingSlash(std::string_view path)
     {
         if (path.empty())
         {
@@ -126,7 +127,7 @@ namespace ctar::cli
         return std::string(path.substr(0, end));
     }
 
-    Status parse_common_options(int argc, char** argv, int& pos, CliOption& opt, std::string_view subcommand_name)
+    Status ParseCommonOptions(int argc, char** argv, int& pos, CliOption& opt, std::string_view subcommand_name)
     {
         constexpr size_t MAX_THREADS = 16U;
         while (pos < argc && argv[pos][0] == '-')
@@ -140,12 +141,12 @@ namespace ctar::cli
                     return error_invalid_arg("missing thread count value after {}", op);
                 }
                 char* end_ptr = nullptr;
-                long val = std::strtol(argv[pos], &end_ptr, 10);
+                const long val = std::strtol(argv[pos], &end_ptr, 10);
                 if (*end_ptr != '\0' || val <= 0)
                 {
                     return error_invalid_arg("invalid thread number '{}', must be positive integer", argv[pos]);
                 }
-                size_t thread_num = static_cast<size_t>(val);
+                auto thread_num = static_cast<size_t>(val);
                 if (thread_num > MAX_THREADS)
                 {
                     thread_num = MAX_THREADS;
@@ -231,10 +232,6 @@ namespace ctar::cli
         int pos = 1;
         const std::string_view first_arg{argv[pos]};
         const auto command = GetCommandType(first_arg);
-        if (command == CommandType::UNKNOWN)
-        {
-            return error_invalid_arg("unknown command: {}", first_arg);
-        }
         switch (command)
         {
         case CommandType::HELP:
@@ -290,7 +287,7 @@ namespace ctar::cli
             {
                 opt.cmd = CommandType::PACK;
                 pos++;
-                auto res = parse_common_options(argc, argv, pos, opt, "pack");
+                auto res = ParseCommonOptions(argc, argv, pos, opt, "pack");
                 if (!res)
                 {
                     return res;
@@ -308,7 +305,7 @@ namespace ctar::cli
             {
                 opt.cmd = CommandType::UNPACK;
                 pos++;
-                auto res = parse_common_options(argc, argv, pos, opt, "unpack");
+                auto res = ParseCommonOptions(argc, argv, pos, opt, "unpack");
                 if (!res)
                 {
                     return res;
@@ -317,6 +314,13 @@ namespace ctar::cli
                 if (remain_argc != 2)
                 {
                     return error_invalid_arg("missing arguments, expected archive path and output directory");
+                }
+                if (opt.comp_config.compression_param != kLZ4AccDefault ||
+                    opt.comp_config.compression_type != CompressionType::kLZ4)
+                {
+                    std::println(std::cout,
+                                 "Warning: for the 'unpack' command, the -c and -p arguments have no effect; the "
+                                 "program automatically adapts for decompression.");
                 }
                 opt.source_path = TrimTrailingSlash(argv[pos++]);
                 opt.output_path = TrimTrailingSlash(argv[pos]);
@@ -343,7 +347,6 @@ namespace ctar::cli
                 if (remain_argc == 0)
                 {
                     opt.specified_path = ".";
-                    return {};
                 }
                 else if (remain_argc == 1)
                 {
@@ -434,7 +437,7 @@ namespace ctar::cli
                     }
                     pos++;
                 }
-                int remain_argc = argc - pos;
+                const int remain_argc = argc - pos;
                 if (remain_argc == 1)
                 {
                     opt.pack_file_path = argv[pos];
@@ -460,7 +463,7 @@ namespace ctar::cli
             }
         default:
             {
-                return error_invalid_arg("unknown command");
+                return error_invalid_arg("unknown command: {}", first_arg);
             }
         }
     }
@@ -476,8 +479,20 @@ namespace ctar::cli
         return ParseArgs(static_cast<int>(argv.size()), argv.data(), opt);
     }
 
-    ResultStatus<FileStats> RunCommand(const CliOption& opt)
+    void PrintStats(const FileStats& file_stats, int64_t elapsed_time, std::ostream& out)
     {
+        std::println(out,
+                     "file count: {}, total bytes: {}, compressed bytes: {}, padding bytes: {}, elapsed time {} ms",
+                     file_stats.total_file_count, file_stats.total_original_size, file_stats.total_compressed_size,
+                     file_stats.padding_size, elapsed_time);
+        std::println(out, "compressed ratio: {:.2f}%, Throughput: {}/s",
+                     CompressionRatio(file_stats.total_original_size, file_stats.total_compressed_size),
+                     ThroughputPerSec(file_stats.total_original_size, elapsed_time));
+    }
+
+    Status RunCommand(const CliOption& opt)
+    {
+        ScopeTimer scope_timer("", false);
         unsigned hw = std::thread::hardware_concurrency();
         unsigned hw_thread_cnt = (hw == 0) ? 1 : (hw);
         unsigned worker_thread_cnt = opt.thread_cnt > 0 ? opt.thread_cnt : hw_thread_cnt;
@@ -518,16 +533,15 @@ namespace ctar::cli
             break;
         case CommandType::STAT:
             {
-                Status status = store.RestoreBlocksFromPack(opt.pack_file_path);
-                if (status)
-                {
-                    return store.GetFileStats();
-                }
-                else
+                if (Status status = store.RestoreBlocksFromPack(opt.pack_file_path); !status)
                 {
                     return error_run_time("failed to restore meta from '{}': {}", opt.pack_file_path,
                                           status.error().message());
                 }
+                auto file_stats = store.GetFileStats();
+                std::println(std::cout, "file count: {}, total bytes: {}, compressed bytes: {}, padding bytes: {}",
+                             file_stats.total_file_count, file_stats.total_original_size,
+                             file_stats.total_compressed_size, file_stats.padding_size);
             }
             break;
         case CommandType::PACK:
@@ -541,6 +555,9 @@ namespace ctar::cli
                         return error_run_time("failed to pack directory '{}': {}", opt.source_path,
                                               status.error().message());
                     }
+                    auto file_stats = store.GetFileStats();
+                    auto elapsed_time = scope_timer.elapsed();
+                    PrintStats(file_stats, elapsed_time);
                 }
                 else
                 {
@@ -551,12 +568,14 @@ namespace ctar::cli
             break;
         case CommandType::UNPACK:
             {
-                Status status = store.UnPackPipeline(opt.source_path, opt.output_path);
-                if (!status)
+                if (Status status = store.UnPackPipeline(opt.source_path, opt.output_path); !status)
                 {
                     return error_run_time("failed to unpack archive '{}': {}", opt.source_path,
                                           status.error().message());
                 }
+                auto file_stats = store.GetFileStats();
+                auto elapsed_time = scope_timer.elapsed();
+                PrintStats(file_stats, elapsed_time);
             }
             break;
         case CommandType::TREE:
@@ -647,6 +666,6 @@ namespace ctar::cli
         default:
             return error_run_time("unknow command");
         }
-        return store.GetFileStats();
+        return {};
     }
 } // namespace ctar::cli

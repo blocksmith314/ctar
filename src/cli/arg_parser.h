@@ -3,18 +3,19 @@
 #include <string>
 #include "api/ctar.h"
 #include "src/core/options.h"
+
 namespace ctar::cli
 {
     enum class CommandType : uint8_t
     {
         UNKNOWN = 0,
         HELP,
+        VERSION,
         PACK,
         UNPACK,
         TREE,
         LS,
         DUMP,
-        VERSION,
         HASH,
         STAT
     };
@@ -66,9 +67,17 @@ namespace ctar::cli
 
 
     void PrintHelp();
+
+    std::string TrimTrailingSlash(std::string_view path);
+
+    Status ParseCommonOptions(int argc, char** argv, int& pos, CliOption& opt, std::string_view subcommand_name);
+
     Status ParseArgs(int argc, char** argv, CliOption& opt);
     [[nodiscard]] Status ParseArgs(const std::vector<std::string_view>& args, CliOption& opt);
-    ResultStatus<FileStats> RunCommand(const CliOption& opt);
+
+    void PrintStats(const FileStats& file_stats,int64_t elapsed_time,std::ostream& out = std::cout);
+
+    Status RunCommand(const CliOption& opt);
 
 
 } // namespace ctar::cli
