@@ -1,4 +1,5 @@
 #include <csignal>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <ranges>
 #include <string>
@@ -199,6 +200,61 @@ namespace ctar
             bool is_equal = test::AreDirectoriesEqual(source_dir_, unpack_dir_ / source_dir_);
             ASSERT_TRUE(is_equal) << "the dir is not match";
         }
+    }
+
+
+    // Every block of this tree has a zero-length payload: the writer must treat that as
+    // "nothing to write" instead of issuing a zero-length iovec.
+    class BlockStoreEmptyFileTest : public ::testing::Test
+    {
+    public:
+        fs::path source_dir_{"empty_file_test_dir"};
+        fs::path pack_dir_{"empty_file_target_test_dir"};
+        fs::path unpack_dir_{"empty_file_unpack_test_dir"};
+        std::string pack_file = (pack_dir_ / "empty_file.ctar").string();
+
+    protected:
+        void SetUp() override
+        {
+            fs::remove_all(source_dir_);
+            fs::remove_all(pack_dir_);
+            fs::remove_all(unpack_dir_);
+            fs::create_directories(source_dir_ / "nested");
+            fs::create_directories(pack_dir_);
+            fs::create_directories(unpack_dir_);
+
+            for (const char* name : {"a.txt", "b.txt", "c.txt", "nested/d.bin", "nested/e.log"})
+            {
+                std::ofstream ofs(source_dir_ / name, std::ios::binary | std::ios::trunc);
+                ASSERT_TRUE(ofs.good()) << "failed to create " << name;
+            }
+        }
+
+        void TearDown() override
+        {
+            fs::remove_all(source_dir_);
+            fs::remove_all(pack_dir_);
+            fs::remove_all(unpack_dir_);
+        }
+    };
+
+    TEST_F(BlockStoreEmptyFileTest, PackAndUnPackTreeOfEmptyFiles)
+    {
+        {
+            BlockStore blob_store;
+            auto status = blob_store.Scan(source_dir_);
+            ASSERT_TRUE(status) << "failed to scan source directory: " << status.error().message();
+            status = blob_store.PackPipeline(pack_file);
+            ASSERT_TRUE(status) << "failed to pack empty files: " << status.error().message();
+            ASSERT_TRUE(VerifyPACKFileIntegrity(pack_file));
+        }
+        {
+            BlockStore blob_store;
+            auto status = blob_store.UnPackPipeline(pack_file, unpack_dir_);
+            ASSERT_TRUE(status) << "failed to restore empty files: " << status.error().message();
+        }
+        ASSERT_TRUE(test::AreDirectoriesEqual(source_dir_, unpack_dir_ / source_dir_))
+            << "the dir is not match";
     }
 
 

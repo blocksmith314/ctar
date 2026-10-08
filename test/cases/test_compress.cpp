@@ -63,6 +63,20 @@ namespace ctar
         ASSERT_EQ(compressed_size, 0);
     }
 
+    TEST(CompressTest, MaxCompressBufferSizeAboveLz4InputLimit)
+    {
+        // Sizes past LZ4_MAX_INPUT_SIZE used to wrap through LZ4's int-based API and
+        // collapse to 0, which left the block buffer too small for the verbatim copy.
+        constexpr uint64_t oversized = static_cast<uint64_t>(LZ4_MAX_INPUT_SIZE) + 4096;
+        ASSERT_EQ(compress::MaxCompressBufferSize(CompressionType::kLZ4, oversized), oversized);
+        ASSERT_EQ(compress::MaxCompressBufferSize(CompressionType::kLZ4HC, oversized), oversized);
+        ASSERT_EQ(compress::MaxCompressBufferSize(CompressionType::kNone, oversized), oversized);
+
+        // At the limit the real LZ4 bound still applies and leaves room for the frame.
+        ASSERT_GT(compress::MaxCompressBufferSize(CompressionType::kLZ4, LZ4_MAX_INPUT_SIZE),
+                  static_cast<uint64_t>(LZ4_MAX_INPUT_SIZE));
+    }
+
 } // namespace ctar
 
 int main(int argc, char** argv)
