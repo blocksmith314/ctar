@@ -40,7 +40,7 @@ namespace ctar
     TEST(XXH3_64, EmptyInput)
     {
         uint64_t h_direct = XXH64(nullptr, 0, kHashSeed);
-
+        EXPECT_EQ(h_direct,kZeroXXHash);
         XXH64_state_t* st = XXH64_createState();
         ASSERT_NE(st, nullptr);
         XXH64_reset(st, kHashSeed);

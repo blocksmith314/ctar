@@ -65,6 +65,9 @@ namespace ctar
     // and taking the leading 64 bits.
     constexpr size_t kHashSeed = 0x19beca14c79d67faULL;
 
+    // XXH64(nullptr, 0, kHashSeed);
+    constexpr uint64_t kZeroXXHash = 0xe80e0f7d067306bbULL;
+
     // Maximum entries for one batch write
     constexpr size_t kMaxBatchWriteEntries = 4;
 
