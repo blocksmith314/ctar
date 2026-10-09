@@ -485,8 +485,8 @@ namespace ctar::cli
                      "file count: {}, total bytes: {}, compressed bytes: {}, padding bytes: {}, elapsed time {} ms",
                      file_stats.total_file_count, file_stats.total_original_size, file_stats.total_compressed_size,
                      file_stats.padding_size, elapsed_time);
-        std::println(out, "compressed ratio: {:.2f}%, Throughput: {}/s",
-                     CompressionRatio(file_stats.total_original_size, file_stats.total_compressed_size),
+        std::println(out, "compression size percent: {:.2f}%, Throughput: {}/s",
+                     CompressionSizePercent(file_stats.total_original_size, file_stats.total_compressed_size),
                      ThroughputPerSec(file_stats.total_original_size, elapsed_time));
     }
 

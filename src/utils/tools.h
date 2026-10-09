@@ -48,17 +48,16 @@ namespace ctar
         Clock::time_point m_begin_;
     };
 
-    /// @brief Calculate compression ratio (compressed / original)
+    /// @brief Calculate compression size percent (compressed / original)
     /// @param original_size original uncompressed byte size
     /// @param compressed_size compressed byte size
-    /// @return compression ratio; returns 1.0 if original_size is zero
-    inline double CompressionRatio(size_t original_size, size_t compressed_size) noexcept
-    {
+    /// @return compression size percent; returns 100.0 if original_size is zero
+    inline double CompressionSizePercent(size_t original_size, size_t compressed_size) noexcept {
         if (original_size == 0)
         {
-            return 1.0;
+            return 100.0;
         }
-        return static_cast<double>(compressed_size) * 100 / static_cast<double>(original_size);
+        return static_cast<double>(compressed_size) * 100.0 / static_cast<double>(original_size);
     }
 
     inline std::string HumanReadableBytes(uint64_t bytes)
