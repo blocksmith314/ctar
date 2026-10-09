@@ -506,7 +506,7 @@ namespace ctar::cli
             break;
         case CommandType::VERSION:
             {
-                std::println(std::cout, "ctar : {} (file format)", kToolVersion.to_string(),
+                std::println(std::cout, "ctar : {} (file format : {})", kToolVersion.to_string(),
                              kFileFormatVersion.to_string());
             }
             break;
