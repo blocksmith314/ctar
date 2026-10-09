@@ -290,7 +290,7 @@ namespace ctar
             {
                 // Nothing to read or compress, but the reader still verifies the hash of
                 // every entry, so it has to be recorded here as well.
-                block_meta.file_hashes[i] = XXH64(nullptr, 0, kHashSeed);
+                block_meta.file_hashes[i] = kZeroXXHash;
                 continue;
             }
             if (auto read_file_status = NewPosixReadFile(file_path))
