@@ -3,6 +3,10 @@
 #include <string>
 #include <string_view>
 #include <cstring>
+#include <vector>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "gtest/gtest.h"
 #include "src/core/file_handle.h"
@@ -356,6 +360,217 @@ namespace ctar::test
         ASSERT_FALSE(r1);
         auto r2 = rFile->RandomReadV(&iov, -1, 0);
         ASSERT_FALSE(r2);
+    }
+
+    // A block whose files are all empty reaches the writer with a single zero-length
+    // iovec. That is a no-op for writev(), not an error.
+    TEST_F(PosixFileHandleTest, RandomWriteVZeroLengthIsNoOp)
+    {
+        constexpr std::string_view seed = "keep-the-existing-content";
+        {
+            auto w_res = ctar::NewPosixWriteFile(std::string(kTestFile), true);
+            ASSERT_TRUE(w_res);
+            ASSERT_TRUE(w_res.value()->Write(seed.size(), seed.data()));
+            ASSERT_TRUE(w_res.value()->Sync());
+        }
+
+        std::string empty;
+        struct iovec iov[2]{};
+        iov[0].iov_base = empty.data();
+        iov[0].iov_len = 0;
+        iov[1].iov_base = empty.data();
+        iov[1].iov_len = 0;
+
+        auto w_res = ctar::NewPosixWriteFile(std::string(kTestFile));
+        ASSERT_TRUE(w_res);
+        ASSERT_TRUE(w_res.value()->RandomWriteV(iov, 2, 0));
+        ASSERT_TRUE(w_res.value()->Sync());
+
+        auto r_res = ctar::NewPosixReadFile(std::string(kTestFile));
+        ASSERT_TRUE(r_res);
+        auto size = r_res.value()->GetFileSize();
+        ASSERT_TRUE(size);
+        ASSERT_EQ(size.value(), seed.size());
+    }
+
+    // IOV_MAX is 1024 on Linux and macOS; a longer list has to be sent in several calls.
+    TEST_F(PosixFileHandleTest, RandomWriteVAndReadVAboveIovMax)
+    {
+        constexpr size_t kChunk = 4;
+        constexpr size_t kCount = 1100; // above IOV_MAX
+        std::string pattern(kChunk, 'Z');
+
+        std::vector<struct iovec> iovs(kCount);
+        for (auto& iv : iovs)
+        {
+            iv.iov_base = pattern.data();
+            iv.iov_len = kChunk;
+        }
+
+        auto w_res = ctar::NewPosixWriteFile(std::string(kTestFile), true);
+        ASSERT_TRUE(w_res);
+        ASSERT_TRUE(w_res.value()->RandomWriteV(iovs.data(), static_cast<int>(iovs.size()), 0));
+        ASSERT_TRUE(w_res.value()->Sync());
+
+        auto r_res = ctar::NewPosixReadFile(std::string(kTestFile));
+        ASSERT_TRUE(r_res);
+        auto size = r_res.value()->GetFileSize();
+        ASSERT_TRUE(size);
+        ASSERT_EQ(size.value(), kChunk * kCount);
+
+        std::string read_back(kChunk * kCount, '\0');
+        for (size_t i = 0; i < kCount; ++i)
+        {
+            iovs[i].iov_base = read_back.data() + i * kChunk;
+            iovs[i].iov_len = kChunk;
+        }
+        auto rd = r_res.value()->RandomReadV(iovs.data(), static_cast<int>(iovs.size()), 0);
+        ASSERT_TRUE(rd);
+        ASSERT_EQ(rd.value(), kChunk * kCount);
+        ASSERT_EQ(read_back, std::string(kChunk * kCount, 'Z'));
+    }
+
+    // The syscall limits are parameters so the splitting loop can be driven with small
+    // buffers instead of allocating gigabytes.
+    TEST_F(PosixFileHandleTest, PwritevAllSplitsByBytesAndIovCount)
+    {
+        constexpr size_t kChunk = 512;
+        constexpr size_t kCount = 8;
+        std::string pattern(kChunk, '\0');
+        for (size_t i = 0; i < kChunk; ++i)
+        {
+            pattern[i] = static_cast<char>('a' + i % 26);
+        }
+
+        std::vector<struct iovec> iovs(kCount);
+        for (auto& iv : iovs)
+        {
+            iv.iov_base = pattern.data();
+            iv.iov_len = kChunk;
+        }
+
+        const std::string file_name(kTestFile);
+        const int fd = ::open(file_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        ASSERT_GE(fd, 0);
+        // At most 3 entries and 1024 bytes per call: 8 x 512 bytes needs 4 calls.
+        Status st = ctar::detail::PwritevAll(fd, file_name, iovs, 0, 1024, 3);
+        ASSERT_TRUE(st) << st.error().message();
+        ASSERT_EQ(::close(fd), 0);
+
+        std::string expected;
+        for (size_t i = 0; i < kCount; ++i)
+        {
+            expected += pattern;
+        }
+
+        auto r_res = ctar::NewPosixReadFile(file_name);
+        ASSERT_TRUE(r_res);
+        std::string actual(expected.size(), '\0');
+        auto rd = r_res.value()->RandomRead(0, actual.size(), actual.data());
+        ASSERT_TRUE(rd);
+        ASSERT_EQ(rd.value(), expected.size());
+        ASSERT_EQ(actual, expected);
+    }
+
+    TEST_F(PosixFileHandleTest, PwritevAllSlicesSingleOversizedEntry)
+    {
+        constexpr size_t kTotal = 4096;
+        std::string payload(kTotal, 'q');
+        size_t offset = 0;
+        for (char& c : payload)
+        {
+            c = static_cast<char>('0' + offset++ % 10);
+        }
+
+        std::vector<struct iovec> iovs(1);
+        iovs[0].iov_base = payload.data();
+        iovs[0].iov_len = payload.size();
+
+        const std::string file_name(kTestFile);
+        const int fd = ::open(file_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        ASSERT_GE(fd, 0);
+        // A single 4096-byte iovec with a 512-byte per-call budget must be sliced.
+        Status st = ctar::detail::PwritevAll(fd, file_name, iovs, 0, 512, 1024);
+        ASSERT_TRUE(st) << st.error().message();
+        ASSERT_EQ(::close(fd), 0);
+
+        auto r_res = ctar::NewPosixReadFile(file_name);
+        ASSERT_TRUE(r_res);
+        std::string actual(kTotal, '\0');
+        auto rd = r_res.value()->RandomRead(0, actual.size(), actual.data());
+        ASSERT_TRUE(rd);
+        ASSERT_EQ(rd.value(), kTotal);
+        ASSERT_EQ(actual, payload);
+    }
+
+    TEST_F(PosixFileHandleTest, PreadvAllSplitsByBytes)
+    {
+        constexpr size_t kTotal = 4096;
+        std::string payload(kTotal, 'r');
+        size_t offset = 0;
+        for (char& c : payload)
+        {
+            c = static_cast<char>('A' + offset++ % 26);
+        }
+
+        const std::string file_name(kTestFile);
+        {
+            auto w_res = ctar::NewPosixWriteFile(file_name, true);
+            ASSERT_TRUE(w_res);
+            ASSERT_TRUE(w_res.value()->Write(payload.size(), payload.data()));
+        }
+
+        std::string actual(kTotal, '\0');
+        std::vector<struct iovec> iovs(4);
+        for (size_t i = 0; i < iovs.size(); ++i)
+        {
+            iovs[i].iov_base = actual.data() + i * 1024;
+            iovs[i].iov_len = 1024;
+        }
+
+        const int fd = ::open(file_name.c_str(), O_RDONLY);
+        ASSERT_GE(fd, 0);
+        auto rd = ctar::detail::PreadvAll(fd, file_name, iovs, 0, 700, 2);
+        ASSERT_TRUE(rd) << rd.error().message();
+        ASSERT_EQ(rd.value(), kTotal);
+        ASSERT_EQ(::close(fd), 0);
+        ASSERT_EQ(actual, payload);
+    }
+
+    TEST_F(PosixFileHandleTest, ReadAllSpansMultipleSyscallsAndStopsAtEof)
+    {
+        constexpr size_t kTotal = 4096;
+        std::string payload(kTotal, 'k');
+
+        const std::string file_name(kTestFile);
+        {
+            auto w_res = ctar::NewPosixWriteFile(file_name, true);
+            ASSERT_TRUE(w_res);
+            ASSERT_TRUE(w_res.value()->Write(payload.size(), payload.data()));
+        }
+
+        const int fd = ::open(file_name.c_str(), O_RDONLY);
+        ASSERT_GE(fd, 0);
+
+        std::string actual(kTotal, '\0');
+        auto positioned = ctar::detail::ReadAll(fd, file_name, 0, true, kTotal, actual.data(), 1000);
+        ASSERT_TRUE(positioned) << positioned.error().message();
+        ASSERT_EQ(positioned.value(), kTotal);
+        ASSERT_EQ(actual, payload);
+
+        std::string sequential(kTotal, '\0');
+        auto seq = ctar::detail::ReadAll(fd, file_name, 0, false, kTotal, sequential.data(), 1000);
+        ASSERT_TRUE(seq) << seq.error().message();
+        ASSERT_EQ(seq.value(), kTotal);
+        ASSERT_EQ(sequential, payload);
+
+        // Past EOF the loop must return a short count rather than spin.
+        char tail[16]{};
+        auto eof = ctar::detail::ReadAll(fd, file_name, kTotal, true, sizeof(tail), tail, 1000);
+        ASSERT_TRUE(eof);
+        ASSERT_EQ(eof.value(), 0U);
+
+        ASSERT_EQ(::close(fd), 0);
     }
 
 } // namespace ctar::test

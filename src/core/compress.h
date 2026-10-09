@@ -16,6 +16,8 @@ namespace ctar
 
     static_assert(kLZ4HCDefault == LZ4HC_CLEVEL_DEFAULT, "kLZ4HCDefault mismatch with LZ4HC_CLEVEL_DEFAULT");
     static_assert(kLZ4HCMax == LZ4HC_CLEVEL_MAX, "kLZ4HCMax mismatch with LZ4HC_CLEVEL_MAX");
+    static_assert(static_cast<uint64_t>(kMaxCompressFileSize) == static_cast<uint64_t>(LZ4_MAX_INPUT_SIZE),
+                  "kMaxCompressFileSize must match the LZ4 input limit");
 
     namespace compress
     {
@@ -25,7 +27,15 @@ namespace ctar
             {
             case CompressionType::kLZ4:
             case CompressionType::kLZ4HC:
-                return LZ4_compressBound(static_cast<int>(src_size));
+                // LZ4_compressBound() takes an int and returns 0 for anything outside
+                // [0, LZ4_MAX_INPUT_SIZE], so the size has to be checked before narrowing.
+                // Input above the limit is never compressed, it is stored verbatim, which
+                // makes the source size itself the worst case.
+                if (src_size > LZ4_MAX_INPUT_SIZE)
+                {
+                    return src_size;
+                }
+                return static_cast<uint64_t>(LZ4_compressBound(static_cast<int>(src_size)));
             case CompressionType::kNone:
                 return src_size;
             default:

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -5,7 +6,6 @@
 #include <utility>
 #include <vector>
 #include <cstring>
-#include <cerrno>
 
 #include "file_handle.h"
 
@@ -60,6 +60,204 @@ namespace ctar
 
     } // anonymous namespace
 
+    namespace detail
+    {
+        namespace
+        {
+            /// Number of leading iovecs that fit into one syscall of at most @p max_bytes
+            /// bytes and @p max_iov entries. The first entry is always accepted, even when
+            /// it is larger than @p max_bytes; the caller slices that one instead.
+            size_t PlanIovBatch(const std::vector<struct iovec>& iovs, const size_t max_bytes, const int max_iov)
+            {
+                size_t count = 0;
+                size_t bytes = 0;
+                while (count < iovs.size() && count < static_cast<size_t>(max_iov))
+                {
+                    if (count > 0 && bytes + iovs[count].iov_len > max_bytes)
+                    {
+                        break;
+                    }
+                    bytes += iovs[count].iov_len;
+                    ++count;
+                    if (bytes >= max_bytes)
+                    {
+                        break;
+                    }
+                }
+                return count;
+            }
+
+            /// Consume the first @p written bytes from @p iovs. preadv/pwritev always
+            /// transfer a prefix of the concatenated buffers, so the head is the only
+            /// place where an entry can be partially consumed.
+            void ConsumeIovPrefix(std::vector<struct iovec>& iovs, size_t written)
+            {
+                for (auto& iv : iovs)
+                {
+                    if (written == 0)
+                    {
+                        break;
+                    }
+                    if (iv.iov_len <= written)
+                    {
+                        written -= iv.iov_len;
+                        iv.iov_base = nullptr;
+                        iv.iov_len = 0;
+                    }
+                    else
+                    {
+                        iv.iov_base = static_cast<char*>(iv.iov_base) + written;
+                        iv.iov_len -= written;
+                        written = 0;
+                    }
+                }
+                std::erase_if(iovs, [](const struct iovec& iv) { return iv.iov_len == 0; });
+            }
+
+            bool HasIoData(const std::vector<struct iovec>& iovs)
+            {
+                return std::any_of(iovs.begin(), iovs.end(), [](const struct iovec& iv) { return iv.iov_len > 0; });
+            }
+        } // anonymous namespace
+
+        Status PwritevAll(int fd, const std::string& file_name, std::vector<struct iovec>& iovs, const uint64_t offset,
+                          const size_t max_bytes, const int max_iov)
+        {
+            // writev() with a zero-length total is a no-op, not an error. Blocks whose
+            // files are all empty reach this path with a single zero-length iovec.
+            if (!HasIoData(iovs))
+            {
+                return {};
+            }
+
+            off_t cur_off = static_cast<off_t>(offset);
+            while (!iovs.empty())
+            {
+                const size_t batch_cnt = PlanIovBatch(iovs, max_bytes, max_iov);
+                if (batch_cnt == 0)
+                {
+                    break;
+                }
+
+                // Shrink the tail of the batch when a single entry exceeds what one
+                // syscall may carry, then restore it so the consume step stays exact.
+                const size_t entry_len = iovs[batch_cnt - 1].iov_len;
+                const bool sliced = entry_len > max_bytes;
+                if (sliced)
+                {
+                    iovs[batch_cnt - 1].iov_len = max_bytes;
+                }
+
+                ssize_t ret;
+                do
+                {
+                    ret = pwritev(fd, iovs.data(), static_cast<int>(batch_cnt), cur_off);
+                }
+                while (ret < 0 && errno == EINTR);
+
+                if (sliced)
+                {
+                    iovs[batch_cnt - 1].iov_len = entry_len;
+                }
+
+                if (ret < 0)
+                {
+                    return error_io("fail to pwritev {}: {}", file_name, strerror(errno));
+                }
+                if (ret == 0)
+                {
+                    return error_io("pwritev made no progress on {}", file_name);
+                }
+
+                cur_off += ret;
+                ConsumeIovPrefix(iovs, static_cast<size_t>(ret));
+            }
+            return {};
+        }
+
+        ResultStatus<size_t> PreadvAll(int fd, const std::string& file_name, std::vector<struct iovec>& iovs,
+                                       const uint64_t offset, const size_t max_bytes, const int max_iov)
+        {
+            off_t cur_off = static_cast<off_t>(offset);
+            size_t total_read = 0;
+
+            while (!iovs.empty())
+            {
+                const size_t batch_cnt = PlanIovBatch(iovs, max_bytes, max_iov);
+                if (batch_cnt == 0)
+                {
+                    break;
+                }
+
+                const size_t entry_len = iovs[batch_cnt - 1].iov_len;
+                const bool sliced = entry_len > max_bytes;
+                if (sliced)
+                {
+                    iovs[batch_cnt - 1].iov_len = max_bytes;
+                }
+
+                ssize_t ret;
+                do
+                {
+                    ret = preadv(fd, iovs.data(), static_cast<int>(batch_cnt), cur_off);
+                }
+                while (ret < 0 && errno == EINTR);
+
+                if (sliced)
+                {
+                    iovs[batch_cnt - 1].iov_len = entry_len;
+                }
+
+                if (ret < 0)
+                {
+                    return error_io("fail to preadv {}: {}", file_name, strerror(errno));
+                }
+                if (ret == 0)
+                {
+                    break; // EOF
+                }
+
+                total_read += static_cast<size_t>(ret);
+                cur_off += ret;
+                ConsumeIovPrefix(iovs, static_cast<size_t>(ret));
+            }
+            return total_read;
+        }
+
+        ResultStatus<size_t> ReadAll(int fd, const std::string& file_name, const uint64_t offset,
+                                     const bool positioned, const size_t read_size, char* read_buffer,
+                                     const size_t max_bytes)
+        {
+            size_t total_read = 0;
+            uint64_t cur_off = offset;
+
+            while (total_read < read_size)
+            {
+                const size_t want = std::min(read_size - total_read, max_bytes);
+                ssize_t ret;
+                do
+                {
+                    ret = positioned ? pread(fd, read_buffer + total_read, want, static_cast<off_t>(cur_off))
+                                     : read(fd, read_buffer + total_read, want);
+                }
+                while (ret < 0 && errno == EINTR);
+
+                if (ret < 0)
+                {
+                    return error_io("fail to read data from {}: {}", file_name, strerror(errno));
+                }
+                if (ret == 0)
+                {
+                    break; // EOF
+                }
+
+                total_read += static_cast<size_t>(ret);
+                cur_off += static_cast<uint64_t>(ret);
+            }
+            return total_read;
+        }
+    } // namespace detail
+
     class PosixReadFile final : public ReadFile
     {
     public:
@@ -73,44 +271,28 @@ namespace ctar
 
         ResultStatus<size_t> Read(size_t read_size, char* read_buffer) override
         {
+            // A zero-length request is a no-op; the buffer is allowed to be null then,
+            // which is what an empty container hands out.
+            if (read_size == 0)
+                return 0;
             if (!read_buffer)
                 return error_run_time("null buffer");
             if (fd_guard_.fd < 0)
                 return error_run_time("file not open");
 
-            ssize_t bytes_read;
-            do
-            {
-                bytes_read = ::read(fd_guard_.fd, read_buffer, read_size);
-            }
-            while (bytes_read < 0 && errno == EINTR);
-
-            if (bytes_read < 0)
-            {
-                return error_io("fail to read data from {}: {}", file_name_, std::strerror(errno));
-            }
-            return static_cast<size_t>(bytes_read);
+            return detail::ReadAll(fd_guard_.fd, file_name_, 0, false, read_size, read_buffer);
         }
 
         ResultStatus<size_t> RandomRead(uint64_t offset, size_t read_size, char* read_buffer) override
         {
+            if (read_size == 0)
+                return 0;
             if (!read_buffer)
                 return error_run_time("null buffer");
             if (fd_guard_.fd < 0)
                 return error_run_time("file not open");
 
-            ssize_t bytes_read;
-            do
-            {
-                bytes_read = ::pread(fd_guard_.fd, read_buffer, read_size, static_cast<off_t>(offset));
-            }
-            while (bytes_read < 0 && errno == EINTR);
-
-            if (bytes_read < 0)
-            {
-                return error_io("fail to read data from {}: {}", file_name_, strerror(errno));
-            }
-            return static_cast<size_t>(bytes_read);
+            return detail::ReadAll(fd_guard_.fd, file_name_, offset, true, read_size, read_buffer);
         }
 
         ResultStatus<size_t> RandomReadV(const struct iovec* iov, int iov_cnt, uint64_t offset) override
@@ -121,51 +303,7 @@ namespace ctar
                 return error_run_time("file not open");
 
             std::vector<struct iovec> tmp_iov(iov, iov + iov_cnt);
-            off_t cur_off = static_cast<off_t>(offset);
-            size_t total_read = 0;
-
-            while (!tmp_iov.empty())
-            {
-                ssize_t ret;
-                do
-                {
-                    ret = preadv(fd_guard_.fd, tmp_iov.data(), static_cast<int>(tmp_iov.size()), cur_off);
-                }
-                while (ret < 0 && errno == EINTR);
-                if (ret < 0)
-                {
-                    return error_io("fail to preadv {}: {}", file_name_, strerror(errno));
-                }
-                if (ret == 0)
-                {
-                    break; // EOF
-                }
-
-                total_read += static_cast<size_t>(ret);
-                cur_off += ret;
-                size_t remain = static_cast<size_t>(ret);
-
-                for (auto& iv : tmp_iov)
-                {
-                    if (remain == 0)
-                        break;
-                    if (iv.iov_len <= remain)
-                    {
-                        remain -= iv.iov_len;
-                        iv.iov_base = nullptr;
-                        iv.iov_len = 0;
-                    }
-                    else
-                    {
-                        iv.iov_base = static_cast<char*>(iv.iov_base) + remain;
-                        iv.iov_len -= remain;
-                        remain = 0;
-                    }
-                }
-
-                std::erase_if(tmp_iov, [](const struct iovec& iv) { return iv.iov_len == 0; });
-            }
-            return total_read;
+            return detail::PreadvAll(fd_guard_.fd, file_name_, tmp_iov, offset);
         }
 
         ResultStatus<size_t> GetFileSize() override
@@ -193,6 +331,8 @@ namespace ctar
 
         Status Write(const size_t write_size, const char* write_buffer) override
         {
+            if (write_size == 0)
+                return {};
             if (!write_buffer)
                 return error_run_time("null buffer");
             if (fd_guard_.fd < 0)
@@ -202,16 +342,21 @@ namespace ctar
             size_t remain = write_size;
             while (remain > 0)
             {
+                const size_t want = std::min(remain, kMaxSingleIoBytes);
                 ssize_t ret;
                 do
                 {
-                    ret = ::write(fd_guard_.fd, ptr, remain);
+                    ret = ::write(fd_guard_.fd, ptr, want);
                 }
                 while (ret == -1 && errno == EINTR);
 
                 if (ret == -1)
                 {
                     return error_io("fail to seq write {}: {}", file_name_, strerror(errno));
+                }
+                if (ret == 0)
+                {
+                    return error_io("seq write made no progress on {}", file_name_);
                 }
                 ptr += ret;
                 remain -= static_cast<size_t>(ret);
@@ -221,6 +366,8 @@ namespace ctar
 
         Status RandomWrite(uint64_t offset, size_t write_size, const char* write_buffer) override
         {
+            if (write_size == 0)
+                return {};
             if (!write_buffer)
                 return error_run_time("null buffer");
             if (fd_guard_.fd < 0)
@@ -231,16 +378,21 @@ namespace ctar
             uint64_t off = offset;
             while (remain > 0)
             {
+                const size_t want = std::min(remain, kMaxSingleIoBytes);
                 ssize_t ret;
                 do
                 {
-                    ret = ::pwrite(fd_guard_.fd, ptr, remain, static_cast<off_t>(off));
+                    ret = ::pwrite(fd_guard_.fd, ptr, want, static_cast<off_t>(off));
                 }
                 while (ret == -1 && errno == EINTR);
 
                 if (ret == -1)
                 {
                     return error_io("fail to rand write {}: {}", file_name_, strerror(errno));
+                }
+                if (ret == 0)
+                {
+                    return error_io("rand write made no progress on {}", file_name_);
                 }
                 ptr += ret;
                 remain -= static_cast<size_t>(ret);
@@ -257,50 +409,7 @@ namespace ctar
                 return error_run_time("file not open");
 
             std::vector<struct iovec> tmp_iov(iov, iov + iov_cnt);
-            off_t cur_off = static_cast<off_t>(offset);
-
-            while (!tmp_iov.empty())
-            {
-                ssize_t ret;
-                do
-                {
-                    ret = pwritev(fd_guard_.fd, tmp_iov.data(), static_cast<int>(tmp_iov.size()), cur_off);
-                }
-                while (ret < 0 && errno == EINTR);
-
-                if (ret < 0)
-                {
-                    return error_io("fail to pwritev {}: {}", file_name_, strerror(errno));
-                }
-                if (ret == 0)
-                {
-                    return error_io("pwritev zero write, unexpected");
-                }
-
-                cur_off += ret;
-                size_t remain = static_cast<size_t>(ret);
-
-                for (auto& iv : tmp_iov)
-                {
-                    if (remain == 0)
-                        break;
-                    if (iv.iov_len <= remain)
-                    {
-                        remain -= iv.iov_len;
-                        iv.iov_base = nullptr;
-                        iv.iov_len = 0;
-                    }
-                    else
-                    {
-                        iv.iov_base = static_cast<char*>(iv.iov_base) + remain;
-                        iv.iov_len -= remain;
-                        remain = 0;
-                    }
-                }
-
-                std::erase_if(tmp_iov, [](const struct iovec& iv) { return iv.iov_len == 0; });
-            }
-            return {};
+            return detail::PwritevAll(fd_guard_.fd, file_name_, tmp_iov, offset);
         }
 
         Status Sync() override

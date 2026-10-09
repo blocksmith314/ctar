@@ -218,16 +218,26 @@ namespace ctar
                     task.block_file_offset = block_region_size_;
                     total_compressed_size_ += std::accumulate(task.file_compressed_sizes.begin(),
                                                               task.file_compressed_sizes.end(), size_t{0});
-                    iovs.push_back({.iov_base = pending.buffer->data.data(), .iov_len = task.block_size});
+                    // A block whose files are all empty has no payload at all; writing a
+                    // zero-length iovec for it would only waste a syscall.
+                    if (task.block_size > 0)
+                    {
+                        iovs.push_back({.iov_base = pending.buffer->data.data(), .iov_len = task.block_size});
+                    }
                     block_region_size_ += task.block_size;
                 }
-                Status write_status =
-                    w_file->RandomWriteV(iovs.data(), static_cast<int>(iovs.size()), meta_region_size_ + batch_start);
+                Status write_status;
+                if (!iovs.empty())
+                {
+                    write_status = w_file->RandomWriteV(iovs.data(), static_cast<int>(iovs.size()),
+                                                        meta_region_size_ + batch_start);
+                }
                 if (!write_status)
                 {
                     batch_end = total;
                     std::lock_guard lock(pack_queue_mutex_);
-                    writer_error_ = error_io("failed to write block to file").error();
+                    writer_error_ = error_io("failed to write block to file: {}", write_status.error().err_message)
+                                        .error();
                 }
                 for (size_t i = pos; i < batch_end; ++i)
                 {
@@ -278,6 +288,9 @@ namespace ctar
             const uint64_t original_size = block_meta.file_orig_sizes[i];
             if (original_size == 0)
             {
+                // Nothing to read or compress, but the reader still verifies the hash of
+                // every entry, so it has to be recorded here as well.
+                block_meta.file_hashes[i] = XXH64(nullptr, 0, kHashSeed);
                 continue;
             }
             if (auto read_file_status = NewPosixReadFile(file_path))
@@ -308,9 +321,11 @@ namespace ctar
                                                      compress_buffer->data.data() + payload_offset, original_size,
                                                      compression_config_.compression_param);
             }
-            // If the input data cannot be compressed, or the compressed size exceeds the original size,
-            // copy the raw data directly to the target buffer instead.
-            if (compressed_size >= original_size || skip_compression)
+            // Files that are already compressed, that exceed kMaxCompressFileSize, or whose
+            // compression produced nothing usable are stored verbatim. The first two cases
+            // leave compressed_size at 0, so without the explicit zero test their payload
+            // would never be copied into the block buffer.
+            if (compressed_size == 0 || compressed_size >= original_size || skip_compression)
             {
                 compressed_size = compress::Compress(CompressionType::kNone, tls_read_buf.data(),
                                                      compress_buffer->data.data() + payload_offset, original_size);
@@ -320,6 +335,16 @@ namespace ctar
             block_meta.file_compressed_sizes[i] = compressed_size;
             block_meta.file_compressed_types[i] = compression_type;
             payload_offset += compressed_size;
+        }
+        // A non-empty file that contributed no payload would be written back as a truncated
+        // or empty file, so fail here instead of producing a silently corrupt archive.
+        for (size_t i = 0; i < file_count; ++i)
+        {
+            if (block_meta.file_orig_sizes[i] != 0 && block_meta.file_compressed_sizes[i] == 0)
+            {
+                ReturnBlockBuffer(std::move(compress_buffer));
+                return error_run_time("file id {} produced an empty payload", block_meta.file_ids[i]);
+            }
         }
         block_meta.payload_size = payload_offset;
         block_meta.block_size = next_4k_align(payload_offset);
