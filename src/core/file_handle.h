@@ -63,7 +63,6 @@ namespace ctar
     // carry, and the two platforms react differently when the request is too large:
     //   Linux clamps the count to MAX_RW_COUNT (0x7ffff000) and returns a short count.
     //   macOS rejects anything above INT_MAX with EINVAL and transfers nothing
-    //   (measured: 2147483647 completes, 2147483648 fails).
     // 1 GiB stays below both limits; the extra syscalls are negligible next to the I/O.
     inline constexpr size_t kMaxSingleIoBytes = 1ULL << 30;
 
