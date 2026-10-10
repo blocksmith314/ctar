@@ -83,7 +83,7 @@ namespace ctar
 
         /// @brief Format  output stream
         /// @param os output stream
-        /// @param entry_path Path starting from designated base directory
+        /// @param dir_file_ref Path starting from designated base directory
         /// @param mode output format mode
         /// @param human_readable enable human‑friendly number formatting
         /// @param col_widths control the output width when OutputMode is LIST
@@ -304,14 +304,14 @@ namespace ctar
 
         /// @brief Get mapping from directory id to its direct child file ids
         /// @return const reference: key = parent directory id, value = list of direct‑child file ids
-        const SortedMap<entry_id_t, std::vector<entry_id_t>>& GetDirIdToChildFileIds() const
+        [[nodiscard]] const SortedMap<entry_id_t, std::vector<entry_id_t>>& GetDirIdToChildFileIds() const
         {
             return pack_file_meta_.dir_id_to_child_file_ids;
         }
 
         /// @brief Get read‑only view of all directory entry records
         /// @return const reference to directory entry records map
-        const SortedMap<entry_id_t, EntryRecord>& GetDirEntryRecords() const
+        [[nodiscard]] const SortedMap<entry_id_t, EntryRecord>& GetDirEntryRecords() const
         {
             return pack_file_meta_.dir_entry_records;
         }
@@ -326,6 +326,7 @@ namespace ctar
         /// @param file_id target file entry id
         /// @param block_id block identifier
         /// @param offset block payload offset inside pack file
+        /// @param compressed_size compressed size inside pack file
         void SetFileEntryMeta(entry_id_t file_id, uint64_t block_id, uint64_t offset, uint64_t compressed_size);
 
         /// @brief Set actual compressed payload bytes, compute block‑region padding bytes

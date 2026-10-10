@@ -8,17 +8,16 @@ namespace ctar
     TEST(CompressTest, CompressAndDecompress)
     {
         const std::string input(1024 * 1024, 'A');
-        const int input_size = static_cast<int>(input.size());
-        const int dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4, input_size);
+        const auto input_size = input.size();
+        const auto dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4, input_size);
         std::string compressed(static_cast<size_t>(dst_capacity), '\0');
-        const int compressed_size = compress::Compress(CompressionType::kLZ4, input.data(), compressed.data(),
-                                                       input_size, static_cast<int>(compressed.size()));
+        const auto compressed_size =
+            compress::Compress(CompressionType::kLZ4, input.data(), compressed.data(), input_size);
         ASSERT_GT(compressed_size, 0);
         ASSERT_LT(compressed_size, input_size);
         std::string decompressed(input.size(), '\0');
-        const int decompressed_size =
-            compress::Decompress(CompressionType::kLZ4, compressed.data(), decompressed.data(), compressed_size,
-                                 static_cast<int>(decompressed.size()));
+        const auto decompressed_size = compress::Decompress(CompressionType::kLZ4, compressed.data(),
+                                                            decompressed.data(), compressed_size, decompressed.size());
         ASSERT_EQ(decompressed_size, input_size);
         EXPECT_EQ(decompressed, input);
     }
@@ -26,13 +25,13 @@ namespace ctar
     TEST(CompressTest, CompressionTypeNone)
     {
         const std::string input(1024, 'A');
-        const int input_size = static_cast<int>(input.size());
-        const int dst_capacity = compress::MaxCompressBufferSize(CompressionType::kNone, input_size);
+        const auto input_size = input.size();
+        const auto dst_capacity = compress::MaxCompressBufferSize(CompressionType::kNone, input_size);
         ASSERT_EQ(dst_capacity, input_size);
         std::string compressed(static_cast<size_t>(dst_capacity), '\0');
 
-        const int compressed_size = compress::Compress(CompressionType::kNone, input.data(), compressed.data(),
-                                                       input_size, static_cast<int>(compressed.size()));
+        const auto compressed_size =
+            compress::Compress(CompressionType::kNone, input.data(), compressed.data(), input_size);
         ASSERT_EQ(compressed_size, input_size);
         ASSERT_EQ(compressed, input);
     }
@@ -40,26 +39,24 @@ namespace ctar
     TEST(CompressTest, DecompressDifferentCompressionType)
     {
         const std::string input(1024 * 1024, 'A');
-        const int input_size = static_cast<int>(input.size());
+        const auto input_size = input.size();
 
-        const int dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4, input_size);
+        const auto dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4, input_size);
         std::string compressed(static_cast<size_t>(dst_capacity), '\0');
-        const int compressed_size = compress::Compress(CompressionType::kLZ4, input.data(), compressed.data(),
-                                                       input_size, static_cast<int>(compressed.size()));
+        const auto compressed_size =
+            compress::Compress(CompressionType::kLZ4, input.data(), compressed.data(), input_size);
         ASSERT_GT(compressed_size, 0);
         ASSERT_LT(compressed_size, input_size);
         std::string decompressed(input.size(), '\0');
-        const int decompressed_size =
-            compress::Decompress(CompressionType::kLZ4HC, compressed.data(), decompressed.data(), compressed_size,
-                                 static_cast<int>(decompressed.size()));
+        const auto decompressed_size = compress::Decompress(CompressionType::kLZ4HC, compressed.data(),
+                                                            decompressed.data(), compressed_size, decompressed.size());
         ASSERT_EQ(decompressed_size, input_size);
         EXPECT_EQ(decompressed, input);
     }
 
     TEST(CompressTest, EmptyData)
     {
-        const int dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4, 0);
-        const int compressed_size = compress::Compress(CompressionType::kLZ4, nullptr, nullptr, 0, dst_capacity);
+        const auto compressed_size = compress::Compress(CompressionType::kLZ4, nullptr, nullptr, 0);
         ASSERT_EQ(compressed_size, 0);
     }
 

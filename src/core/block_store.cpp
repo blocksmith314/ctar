@@ -59,8 +59,7 @@ namespace ctar
         entry_id_t dir_file_id = kRootDirId;
         if (!target_dir.empty())
         {
-            auto s = pack_file_handle_.GetDirIdByDirPath(target_dir);
-            if (s)
+            if (auto s = pack_file_handle_.GetDirIdByDirPath(target_dir))
             {
                 dir_file_id = s.value();
             }
@@ -80,8 +79,7 @@ namespace ctar
         entry_id_t dir_file_id = kRootDirId;
         if (!target_dir.empty())
         {
-            auto s = pack_file_handle_.GetDirIdByDirPath(target_dir);
-            if (s)
+            if (auto s = pack_file_handle_.GetDirIdByDirPath(target_dir))
             {
                 dir_file_id = s.value();
             }
@@ -802,7 +800,7 @@ namespace ctar
         {
             data_block_meta_size += data_block_meta.SerializedSize();
         }
-        // use a uint64_t to store the count of blocks
+        // use an uint64_t to store the count of blocks
         data_block_meta_size += sizeof(uint64_t);
         return header_size + pack_file_meta_size + data_block_meta_size;
     }

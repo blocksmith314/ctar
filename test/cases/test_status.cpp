@@ -54,7 +54,7 @@ namespace ctar
         Status status = error_not_found("blob not found, id:{}", 5);
         EXPECT_FALSE(status);
         EXPECT_EQ(status.error().type(), ctar::ErrorType::kNotFound);
-        EXPECT_NE(status.error().message().find("5"), std::string::npos);
+        EXPECT_NE(status.error().message().find('5'), std::string::npos);
     }
 
     TEST(ErrorStatusTest, ErrorMacro_Corruption)

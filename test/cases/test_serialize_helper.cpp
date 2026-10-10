@@ -41,7 +41,7 @@ namespace ctar
 
     TEST(FieldSize, FixedFieldSize)
     {
-        TestStruct obj;
+        constexpr TestStruct obj{};
         ASSERT_EQ(FixedFieldTotalSize(obj.a), 1);
         ASSERT_EQ(FixedFieldTotalSize(obj.b), 2);
         ASSERT_EQ(FixedFieldTotalSize(obj.c), 4);
@@ -119,7 +119,7 @@ namespace ctar
         EXPECT_EQ(FormatTime(0), "Jan 01  1970");
         EXPECT_EQ(FormatTime(3600 * 24), "Jan 02  1970");
 
-        const long long now_sec = static_cast<long long>(std::time(nullptr));
+        const auto now_sec = static_cast<long long>(std::time(nullptr));
         std::string out = FormatTime(now_sec);
         EXPECT_EQ(out.size(), 12U);
         EXPECT_TRUE(out.find(':') != std::string::npos);

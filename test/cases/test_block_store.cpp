@@ -54,7 +54,7 @@ namespace ctar
         {
             return testing::AssertionFailure() << "GetFileSize failed, file: " << pack_file;
         }
-        const off_t file_sz = file_size_status.value();
+        const auto file_sz = static_cast<off_t>(file_size_status.value());
         const off_t tail_magic_offset = file_sz - static_cast<off_t>(magic_len);
         if (tail_magic_offset < 0)
         {

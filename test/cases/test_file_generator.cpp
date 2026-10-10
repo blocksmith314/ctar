@@ -127,8 +127,7 @@ namespace ctar
             if (!entry.is_regular_file(ec))
                 continue;
 
-            auto p = entry.path();
-            if (p.filename().string().starts_with("rand_file_"))
+            if (const auto& p = entry.path(); p.filename().string().starts_with("rand_file_"))
             {
                 found = true;
                 std::ifstream input(p, std::ios::binary);
@@ -136,7 +135,7 @@ namespace ctar
 
                 std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
                 ASSERT_EQ(content.size(), 4096U);
-                EXPECT_GT(std::count(content.begin(), content.end(), 'A'), 4000);
+                EXPECT_GT(std::ranges::count(content.begin(), content.end(), 'A'), 4000);
                 break;
             }
         }
