@@ -236,8 +236,8 @@ namespace ctar
                 {
                     batch_end = total;
                     std::lock_guard lock(pack_queue_mutex_);
-                    writer_error_ = error_io("failed to write block to file: {}", write_status.error().err_message)
-                                        .error();
+                    writer_error_ =
+                        error_io("failed to write block to file: {}", write_status.error().err_message).error();
                 }
                 for (size_t i = pos; i < batch_end; ++i)
                 {
@@ -275,9 +275,13 @@ namespace ctar
 
         uint64_t payload_offset = 0;
         size_t file_count = block_meta.file_ids.size();
+        CompressionType compression_type;
         for (size_t i = 0; i < file_count; ++i)
         {
             entry_id_t fid = block_meta.file_ids[i];
+            bool has_compressed = false;
+            uint64_t compressed_size = 0;
+            compression_type = compression_config_.compression_type;
             auto file_name_status = pack_file_handle_.GetFileNameByFileId(fid);
             if (!file_name_status)
             {
@@ -291,41 +295,49 @@ namespace ctar
                 // Nothing to read or compress, but the reader still verifies the hash of
                 // every entry, so it has to be recorded here as well.
                 block_meta.file_hashes[i] = kZeroXXHash;
-                continue;
-            }
-            if (auto read_file_status = NewPosixReadFile(file_path))
-            {
-                auto& rf = read_file_status.value();
-                auto read_status = rf->Read(original_size, tls_read_buf.data());
-                if (!read_status || read_status.value() != original_size)
-                {
-                    ReturnBlockBuffer(std::move(compress_buffer));
-                    return error_io("fail to read data from {}", file_path);
-                }
+                compression_type = CompressionType::kNone;
             }
             else
             {
-                ReturnBlockBuffer(std::move(compress_buffer));
-                return error_not_found("read file fail: {}", file_path);
+                if (auto read_file_status = NewPosixReadFile(file_path))
+                {
+                    auto& rf = read_file_status.value();
+                    auto read_status = rf->Read(original_size, tls_read_buf.data());
+                    if (!read_status || read_status.value() != original_size)
+                    {
+                        ReturnBlockBuffer(std::move(compress_buffer));
+                        return error_io("fail to read data from {}", file_path);
+                    }
+                }
+                else
+                {
+                    ReturnBlockBuffer(std::move(compress_buffer));
+                    return error_not_found("read file fail: {}", file_path);
+                }
             }
             bool skip_compression = ShouldSkipCompression(file_name_status.value());
-            CompressionType compression_type;
 
-            const bool can_compress = !skip_compression && original_size <= kMaxCompressFileSize;
-            compression_type = compression_config_.compression_type;
+            const bool can_compress = !skip_compression && original_size <= kMaxCompressFileSize && original_size > 0;
             block_meta.file_hashes[i] = XXH64(tls_read_buf.data(), original_size, kHashSeed);
-            uint64_t compressed_size = 0;
             if (can_compress)
             {
                 compressed_size = compress::Compress(compression_type, tls_read_buf.data(),
                                                      compress_buffer->data.data() + payload_offset, original_size,
                                                      compression_config_.compression_param);
+                if (compressed_size > 0 && compressed_size < original_size)
+                {
+                    has_compressed = true;
+                }
+                else if (compressed_size == 0)
+                {
+                    ReturnBlockBuffer(std::move(compress_buffer));
+                    return error_run_time("file id {} produced an empty payload", block_meta.file_ids[i]);
+                }
             }
-            // Files that are already compressed, that exceed kMaxCompressFileSize, or whose
-            // compression produced nothing usable are stored verbatim. The first two cases
-            // leave compressed_size at 0, so without the explicit zero test their payload
-            // would never be copied into the block buffer.
-            if (compressed_size == 0 || compressed_size >= original_size || skip_compression)
+            // 1. skip_compression = true
+            // 2. compressed_size >= original_size
+            // 3. compress failed
+            if (!has_compressed && original_size > 0)
             {
                 compressed_size = compress::Compress(CompressionType::kNone, tls_read_buf.data(),
                                                      compress_buffer->data.data() + payload_offset, original_size);
@@ -336,16 +348,7 @@ namespace ctar
             block_meta.file_compressed_types[i] = compression_type;
             payload_offset += compressed_size;
         }
-        // A non-empty file that contributed no payload would be written back as a truncated
-        // or empty file, so fail here instead of producing a silently corrupt archive.
-        for (size_t i = 0; i < file_count; ++i)
-        {
-            if (block_meta.file_orig_sizes[i] != 0 && block_meta.file_compressed_sizes[i] == 0)
-            {
-                ReturnBlockBuffer(std::move(compress_buffer));
-                return error_run_time("file id {} produced an empty payload", block_meta.file_ids[i]);
-            }
-        }
+
         block_meta.payload_size = payload_offset;
         block_meta.block_size = next_4k_align(payload_offset);
         if (!EnqueueBlockBuffer(block_meta.block_id, std::move(compress_buffer)))
@@ -384,6 +387,7 @@ namespace ctar
         fs::path output_dir =
             fs::path(target_path_) / fs::path(std::string(block_meta.dir_stats.dir_path)).relative_path();
         std::string decompress_buffer;
+        uint64_t hash_value;
         for (size_t i = 0; i < file_count; ++i)
         {
             entry_id_t fid = block_meta.file_ids[i];
@@ -394,17 +398,22 @@ namespace ctar
             }
             const uint64_t file_offset = block_meta.file_offsets[i];
             std::string output_file_name = output_dir / std::string(file_name_status.value());
-            decompress_buffer.reserve(block_meta.file_orig_sizes[i]);
-            auto decompress_size = compress::Decompress(
-                block_meta.file_compressed_types[i], tls_block_buf.data() + file_offset, decompress_buffer.data(),
-                block_meta.file_compressed_sizes[i], block_meta.file_orig_sizes[i]);
-
-            if (decompress_size != block_meta.file_orig_sizes[i])
+            if (block_meta.file_orig_sizes[i] > 0)
             {
-                return error_corruption("failed to decompress file: {}", output_file_name);
+                decompress_buffer.reserve(block_meta.file_orig_sizes[i]);
+                auto decompress_size = compress::Decompress(
+                    block_meta.file_compressed_types[i], tls_block_buf.data() + file_offset, decompress_buffer.data(),
+                    block_meta.file_compressed_sizes[i], block_meta.file_orig_sizes[i]);
+                if (decompress_size != block_meta.file_orig_sizes[i])
+                {
+                    return error_corruption("failed to decompress file: {}", output_file_name);
+                }
+                hash_value = XXH64(decompress_buffer.data(), block_meta.file_orig_sizes[i], kHashSeed);
             }
-
-            auto hash_value = XXH64(decompress_buffer.data(), block_meta.file_orig_sizes[i], kHashSeed);
+            else
+            {
+                hash_value = kZeroXXHash;
+            }
             if (hash_value != block_meta.file_hashes[i])
             {
                 return error_corruption("the hash value of decompressed data is not equal to the original file: {}",
@@ -615,7 +624,6 @@ namespace ctar
         }
 
 
-
         if (block_region_size_ < max_block_region_size_)
         {
             if (!write_file->TruncFile(static_cast<off_t>(meta_region_size_ + block_region_size_)))
@@ -630,8 +638,9 @@ namespace ctar
         }
         std::string magic_number;
         magic_number.reserve(sizeof(MagicNumber));
-        PutFixed32(&magic_number,MagicNumber);
-        status = write_file->RandomWrite(meta_region_size_ + block_region_size_,sizeof(MagicNumber), magic_number.data());
+        PutFixed32(&magic_number, MagicNumber);
+        status =
+            write_file->RandomWrite(meta_region_size_ + block_region_size_, sizeof(MagicNumber), magic_number.data());
         if (!status)
         {
             fs::remove(output_pack_file);
