@@ -115,8 +115,8 @@ namespace ctar::test
 
             auto sort_by_filename = [](const std::filesystem::path& a, const std::filesystem::path& b)
             { return a.filename() < b.filename(); };
-            std::sort(entries1.begin(), entries1.end(), sort_by_filename);
-            std::sort(entries2.begin(), entries2.end(), sort_by_filename);
+            std::ranges::sort(entries1.begin(), entries1.end(), sort_by_filename);
+            std::ranges::sort(entries2.begin(), entries2.end(), sort_by_filename);
 
             for (size_t i = 0; i < entries1.size(); ++i)
             {

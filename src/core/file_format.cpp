@@ -327,8 +327,8 @@ namespace ctar
     void PackFileHandle::AddEntry(const entry_id_t key, std::string_view name, std::string* data_buf,
                                   SortedMap<entry_id_t, EntryRecord>& map, const EntryMeta& file_meta)
     {
-        const uint64_t off = static_cast<uint64_t>(data_buf->size());
-        const uint64_t len = static_cast<uint64_t>(name.size());
+        const auto off = static_cast<uint64_t>(data_buf->size());
+        const auto len = static_cast<uint64_t>(name.size());
         const Handle handle{off, len};
         data_buf->append(name.data(), name.size());
         map.put(key, {handle, file_meta});
@@ -658,8 +658,7 @@ namespace ctar
             {
                 for (entry_id_t sub_file_id : sub_files)
                 {
-                    auto res = GetListWidthByFileId(sub_file_id);
-                    if (res)
+                    if (auto res = GetListWidthByFileId(sub_file_id))
                     {
                         col_widths.owner_name_width =
                             std::max(col_widths.owner_name_width, res.value().owner_name_width);

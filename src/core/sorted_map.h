@@ -138,7 +138,7 @@ namespace ctar
             if (cnt == 0)
                 return;
 
-            const Entry* src = reinterpret_cast<const Entry*>(ptr);
+            const auto* src = reinterpret_cast<const Entry*>(ptr);
             data_.assign(src, src + cnt);
             skip_ptr(ptr, cnt * sizeof(Entry));
         }

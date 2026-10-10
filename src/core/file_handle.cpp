@@ -116,7 +116,7 @@ namespace ctar
 
             bool HasIoData(const std::vector<struct iovec>& iovs)
             {
-                return std::any_of(iovs.begin(), iovs.end(), [](const struct iovec& iv) { return iv.iov_len > 0; });
+                return std::ranges::any_of(iovs, [](const struct iovec& iv) { return iv.iov_len > 0; });
             }
         } // anonymous namespace
 
@@ -130,7 +130,7 @@ namespace ctar
                 return {};
             }
 
-            off_t cur_off = static_cast<off_t>(offset);
+            auto cur_off = static_cast<off_t>(offset);
             while (!iovs.empty())
             {
                 const size_t batch_cnt = PlanIovBatch(iovs, max_bytes, max_iov);
@@ -178,7 +178,7 @@ namespace ctar
         ResultStatus<size_t> PreadvAll(int fd, const std::string& file_name, std::vector<struct iovec>& iovs,
                                        const uint64_t offset, const size_t max_bytes, const int max_iov)
         {
-            off_t cur_off = static_cast<off_t>(offset);
+            auto cur_off = static_cast<off_t>(offset);
             size_t total_read = 0;
 
             while (!iovs.empty())
