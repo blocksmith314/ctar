@@ -20,7 +20,7 @@ namespace ctar::cli
         STAT
     };
 
-    constexpr std::string PackFileSuffix = ".ctar";
+    constexpr std::string_view PackFileSuffix = ".ctar";
 
     [[nodiscard]] constexpr CommandType GetCommandType(std::string_view arg) noexcept
     {

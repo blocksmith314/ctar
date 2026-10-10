@@ -197,7 +197,7 @@ namespace ctar::test
     TEST_F(PosixFileHandleTest, ReadNullptrBuffer)
     {
         auto w = ctar::NewPosixWriteFile(std::string(kTestFile), true);
-        constexpr std::string s = "abcd";
+        constexpr std::string_view s = "abcd";
         ASSERT_TRUE(w.value()->Write(s.size(), s.data()));
 
         auto r_res = ctar::NewPosixReadFile(std::string(kTestFile));
