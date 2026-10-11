@@ -19,31 +19,55 @@ It is a good fit for industries such as AI and autonomous driving that process l
 
 Run `ctar --help` for the rest.
 
+## Benchmark
+Benchmark environment: Apple Silicon macOS  
+Test dataset: [linux](https://github.com/torvalds/linux.git) source directory, ~100k files, approximately 2G in size.  
+Hyperfine, 10 runs each.  
+
+| Command                                                              | Mean Wall Time | Peak Memory | Compressed Size |
+|----------------------------------------------------------------------|----------------|-------------|-----------------|
+| `./ctar pack -t 8 linux linux.ctar`                                  | 6 s            | 861.1 MiB   | 810M            |
+| `tar -cf - linux \| lz4 -T8 -c -f > linux.tar.lz4`                   | 104 s          | 31.3 MiB    | 736M            |
+
+`ctar` is **17× faster** than `tar + lz4` on this dataset.
+
+### Tradeoffs
+- `tar + lz4`: Streaming pipeline design with low memory footprint. Performance is heavily bounded by disk I/O and shows large variance between runs.
+- `ctar`: Loads the dataset into memory before parallel compression. It achieves drastically faster packing at the cost of much higher peak memory usage.
+
+> Note: This benchmark uses hot page cache. Results may vary depending on hardware, dataset size, and cold storage access scenarios.
+
 ## Installation
 
-### Prebuilt binaries
+### Prebuilt Binaries
+Static standalone binaries are provided. No local compilation required; you can run the program directly after download.
 
-Download the artifact for your platform from the [releases page](https://github.com/blocksmith314/ctar/releases):
-
-| Platform | Standalone executable |
+| Platform | Standalone Executable |
 |---|---|
 | Linux x86_64 | `ctar-<version>-linux-x86_64` |
 | macOS arm64 | `ctar-<version>-macos-arm64` |
 
-> **macOS requirement**: macOS **13.3 or newer**, on Apple Silicon.
+> **macOS Requirement**: macOS **13.3 or newer**, Apple Silicon only.
 
+#### Method 1: Manual Download  
+
+Visit the [Releases](https://github.com/blocksmith314/ctar/releases) page and download the binary matching your operating system. Grant execute permission and run it directly.
+
+#### Method 2: CLI One-Liner Installation
+
+Run the script below in your terminal to download, deploy and install the binary to system PATH automatically:
 ```shell
 VERSION=v1.0.0
 BASE=https://github.com/blocksmith314/ctar/releases/download/$VERSION
-
+# Linux x86_64
 curl -sSL -O "$BASE/ctar-$VERSION-linux-x86_64"
-curl -sSL -O "$BASE/SHA256SUMS"
-
-# verify the download
-sha256sum -c --ignore-missing SHA256SUMS
-
 chmod +x ctar-$VERSION-linux-x86_64
 sudo mv ctar-$VERSION-linux-x86_64 /usr/local/bin/ctar
+# macOS arm64 (Apple Silicon)
+curl -sSL -O "$BASE/ctar-$VERSION-macos-arm64"
+chmod +x ctar-$VERSION-macos-arm64
+sudo mv ctar-$VERSION-macos-arm64 /usr/local/bin/ctar
+# Verify installation
 ctar --help
 ```
 

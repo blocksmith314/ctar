@@ -16,11 +16,28 @@ ctar（Cloud-era Tar）是一款受传统 tar 启发的现代归档工具，主�
 
 更多功能可用 `--help` 查看。
 
+## 基准测试
+测试环境：Apple Silicon macOS  
+测试数据集：[linux](https://github.com/torvalds/linux.git) 源码目录, 文件数量约 10 万，大小约 2G   
+使用 hyperfine 工具，每组运行10次。  
+
+| 命令                                                                   | 平均耗时  | 峰值内存 | 压缩后文件大小 |
+|----------------------------------------------------------------------|-------|---|---------|
+| `./ctar pack -t 8 linux linux.ctar`                                  | 6 秒   | 861.1 MiB | 810M    |
+| `tar -cf - linux                   \| lz4 -T8 -c -f > linux.tar.lz4` | 104 秒 | 31.3 MiB | 736M    |
+
+在此数据集上，`ctar` 的打包速度比 `tar + lz4` **快 17 倍**。
+
+### 取舍说明
+- `tar + lz4`：流式流水线设计，内存占用低。性能受磁盘 IO 限制，测试结果波动较大。
+- `ctar`：先将数据集加载至内存再执行并行压缩。压缩速度大幅提升，但峰值内存开销显著更高。
+
+> 注意：本次基准测试在**热页缓存**条件下执行。结果会随硬件、数据集大小以及冷存储读取场景发生变化。
+
 ## 安装
 
 ### 预编译二进制
-
-从 [Releases](https://github.com/blocksmith314/ctar/releases) 页面下载对应平台的产物：
+项目提供静态独立可执行文件，无需本地编译，下载后即可直接使用。
 
 | 平台 | 独立可执行文件 |
 |---|---|
@@ -29,18 +46,24 @@ ctar（Cloud-era Tar）是一款受传统 tar 启发的现代归档工具，主�
 
 > **macOS 要求**：需要 macOS **13.3 及以上**，且必须为 Apple Silicon。
 
+#### 方法一：手动下载
+访问 [Releases](https://github.com/blocksmith314/ctar/releases) 页面，根据操作系统选择对应的二进制文件下载。赋予执行权限后，即可直接运行。
+
+#### 方法二：命令行一键安装
+在终端执行以下脚本，自动下载、部署并将程序安装到系统 PATH：
+
 ```shell
 VERSION=v1.0.0
 BASE=https://github.com/blocksmith314/ctar/releases/download/$VERSION
-
+# Linux x86_64
 curl -sSL -O "$BASE/ctar-$VERSION-linux-x86_64"
-curl -sSL -O "$BASE/SHA256SUMS"
-
-# 校验下载完整性
-sha256sum -c --ignore-missing SHA256SUMS
-
 chmod +x ctar-$VERSION-linux-x86_64
 sudo mv ctar-$VERSION-linux-x86_64 /usr/local/bin/ctar
+# macOS arm64 (Apple Silicon)
+curl -sSL -O "$BASE/ctar-$VERSION-macos-arm64"
+chmod +x ctar-$VERSION-macos-arm64
+sudo mv ctar-$VERSION-macos-arm64 /usr/local/bin/ctar
+# 验证安装
 ctar --help
 ```
 
