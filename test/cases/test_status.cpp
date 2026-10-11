@@ -33,12 +33,13 @@ namespace ctar
 
     TEST(ErrorStatusTest, MakeErrorBuildUnexpected)
     {
-        auto res = make_error(ErrorType::kInvalidArgument, "bad param", "test.cpp", 12);
+        const auto current_location = std::source_location::current();
+        auto res = make_error(ErrorType::kInvalidArgument, "bad param",current_location);
         const auto& err = res.error();
         EXPECT_EQ(err.type(), ErrorType::kInvalidArgument);
         EXPECT_EQ(err.err_message, "bad param");
-        EXPECT_EQ(err.source_file, "test.cpp");
-        EXPECT_EQ(err.source_line, 12);
+        EXPECT_EQ(err.source_file, current_location.file_name());
+        EXPECT_EQ(err.source_line, current_location.line());
     }
 
     TEST(ErrorStatusTest, ErrorMacro_Io)
@@ -96,19 +97,20 @@ namespace ctar
 
     TEST(ResultStatusTest, ReturnErrorState)
     {
-        ResultStatus<uint64_t> res = make_error(ErrorType::kIoError, "read failed", "x.cpp", 99);
+        const auto current_location = std::source_location::current();
+        ResultStatus<uint64_t> res = make_error(ErrorType::kIoError, "read failed",current_location);
         EXPECT_FALSE(res);
         EXPECT_FALSE(res.has_value());
         const auto& err = res.error();
         EXPECT_EQ(err.type(), ErrorType::kIoError);
-        EXPECT_EQ(err.source_line, 99);
+        EXPECT_EQ(err.source_line, current_location.line());
 
         EXPECT_THROW((void)res.value(), std::bad_expected_access<ErrorStatus>);
     }
 
     TEST(ErrorStatusTest, CopyConstructError)
     {
-        ErrorStatus src(ErrorType::kRuntimeError, "test err", "a.cpp", 10);
+        const ErrorStatus src(ErrorType::kRuntimeError, "test err", "a.cpp", 10);
         ErrorStatus dst = src;
         dst.err_message = "modified copy";
         EXPECT_EQ(dst.type(), src.type());
@@ -144,7 +146,7 @@ namespace ctar
         ResultStatus<int> val_move = std::move(val_ok);
         EXPECT_EQ(val_move.value(), 42);
 
-        ResultStatus<int> err_src = make_error(ErrorType::kRuntimeError, "err", "x.cc", 1);
+        ResultStatus<int> err_src = make_error(ErrorType::kRuntimeError, "err");
         ResultStatus<int> err_copy = err_src;
         EXPECT_FALSE(err_copy);
 
