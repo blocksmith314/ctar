@@ -7,8 +7,8 @@
 #else
 #include <unistd.h>
 #endif
-#include <utility>
 #include <print>
+#include <utility>
 
 #include "file_generator.h"
 
@@ -16,26 +16,6 @@
 namespace
 {
     namespace fs = std::filesystem;
-    struct GeneratorOptions
-    {
-        fs::path output_dir = "./test_data";
-        ctar::test::CompressLevel compress = ctar::test::CompressLevel::NoCompress;
-        ctar::test::RandomSeedMode random_seed_mode = ctar::test::RandomSeedMode::AUTO;
-        bool random_mode = true;
-        bool create_junk = false;
-
-        uint32_t first_level_dir_count = 2;
-        uint32_t max_dir_depth = 3;
-        uint32_t file_count = 100;
-
-        // use for random_mode = false
-        uint32_t bytes_per_file = 60;
-        uint32_t bytes_per_line = 20;
-
-        // use for random_mode = true
-        uint64_t min_file_size = 1024;
-        uint64_t max_file_size = 1024 * 1024;
-    };
 
     void PrintUsage(const char* program_name)
     {
@@ -47,7 +27,8 @@ namespace
           --depth <n>                  max directory tree depth (default: 3)
           --min-size <bytes>           minimum random file size (default: 1024)
           --max-size <bytes>           maximum random file size (default: 1048576)
-          --junk                       create junk files in root directory
+          --junk                       create junk files in root directory (default: false)
+          --zero                       create zero size file (default: false)
           --compress high|medium|none  file content entropy (default: none)
           --bytes-per-file <n>         preset file size (default: 60)
           --bytes-per-line <n>         preset bytes per line (default: 20)
@@ -91,7 +72,7 @@ namespace
         return false;
     }
 
-    bool ParseArgs(int argc, char** argv, GeneratorOptions& options)
+    bool ParseArgs(int argc, char** argv, ctar::test::GeneratorOption& options)
     {
         for (int i = 1; i < argc; ++i)
         {
@@ -169,11 +150,15 @@ namespace
             }
             else if (arg == "--junk")
             {
-                options.create_junk = true;
+                options.create_junk_file = true;
+            }
+            else if (arg == "--zero")
+            {
+                options.create_zero_file = true;
             }
             else if (arg == "--compress")
             {
-                if (i + 1 >= argc || !ParseCompressLevel(argv[++i], options.compress))
+                if (i + 1 >= argc || !ParseCompressLevel(argv[++i], options.compress_level))
                 {
                     std::println(std::cerr, "--compress must be high, medium, or none");
                     return false;
@@ -217,7 +202,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-    GeneratorOptions options;
+    ctar::test::GeneratorOption options;
     if (argc > 1 && (std::string_view(argv[1]) == "-h" || std::string_view(argv[1]) == "--help"))
     {
         PrintUsage(argv[0]);
@@ -239,9 +224,7 @@ int main(int argc, char** argv)
 
         if (options.random_mode)
         {
-            res = generator.GenerateRandomFiles(options.first_level_dir_count, options.max_dir_depth,
-                                                options.file_count, options.min_file_size, options.max_file_size,
-                                                options.create_junk, options.compress);
+            res = generator.GenerateRandomFiles(options);
         }
         else
         {
@@ -324,7 +307,7 @@ namespace ctar::test
                 next_level.clear();
                 for (const auto& parent_dir : current_level)
                 {
-                    uint64_t sub_count = sub_dir_cnt_dist(*gen_);
+                    const uint64_t sub_count = sub_dir_cnt_dist(*gen_);
                     for (uint64_t seq = 0; seq < sub_count; ++seq)
                     {
                         fs::path child = parent_dir / std::format("level{}_{}", sub_depth + 1, seq);
@@ -383,7 +366,7 @@ namespace ctar::test
     {
         if (!gen_.has_value())
         {
-            std::println("random generator not initialized");
+            std::println(std::cerr,"random generator not initialized");
             return false;
         }
 
@@ -402,7 +385,7 @@ namespace ctar::test
         std::ofstream out(file_path, std::ios::binary);
         if (!out.is_open())
         {
-            std::println("failed to open file {}", file_path.string());
+            std::println(std::cerr,"failed to open file: {}", file_path.string());
             return false;
         }
 
@@ -442,7 +425,7 @@ namespace ctar::test
             out.write(chunk_buf.data(), static_cast<std::streamsize>(write_len));
             if (!out)
             {
-                std::println("write failed at path {}, offset {}", file_path.string(), file_size - remain);
+                std::println(std::cerr,"failed write data to path: {}, offset: {}", file_path.string(), file_size - remain);
                 return false;
             }
             remain -= write_len;
@@ -451,31 +434,29 @@ namespace ctar::test
         out.flush();
         if (!out)
         {
-            std::println("final flush failed for file {}", file_path.string());
+            std::println(std::cerr,"failed to flush file: {}", file_path.string());
             return false;
         }
         out.close();
         if (!out)
         {
-            std::println("close failed for file {}", file_path.string());
+            std::println(std::cerr,"failed to close file: {}", file_path.string());
             return false;
         }
         return true;
     }
 
-
     bool FileGenerator::CreateJunkFiles(const fs::path& dir) const
     {
         for (const auto& file_name : junk_files)
         {
-            if (auto res = WriteRandomFile(dir / file_name, kJunkFileSize, CompressLevel::NoCompress); !res)
+            if (const auto res = WriteRandomFile(dir / file_name, kJunkFileSize, CompressLevel::NoCompress); !res)
             {
                 return res;
             }
         }
         return true;
     }
-
 
     bool FileGenerator::GeneratePresetFiles(const uint64_t bytes_per_file, const uint64_t bytes_per_line)
     {
@@ -489,7 +470,7 @@ namespace ctar::test
             std::ofstream file(full_file_path, std::ios::binary);
             if (!file)
             {
-                std::println("Failed to open file : {}", full_file_path.string());
+                std::println(std::cerr,"failed to open file: {}", full_file_path.string());
                 return false;
             }
 
@@ -511,13 +492,13 @@ namespace ctar::test
             file.flush();
             if (!file)
             {
-                std::println("flush preset file failed {}", full_file_path.string());
+                std::println(std::cerr,"failed to flush preset file: {}", full_file_path.string());
                 return false;
             }
             file.close();
             if (!file)
             {
-                std::println("close preset file failed {}", full_file_path.string());
+                std::println(std::cerr,"failed to close preset file: {}", full_file_path.string());
                 return false;
             }
             total_file_size += expected_size;
@@ -527,48 +508,51 @@ namespace ctar::test
         return true;
     }
 
-    bool FileGenerator::GenerateRandomFiles(uint64_t first_level_dir_count, uint64_t max_dir_depth, uint64_t file_count,
-                                            uint64_t min_file_size, uint64_t max_file_size, bool create_junk,
-                                            CompressLevel compress)
+    bool FileGenerator::GenerateRandomFiles(const GeneratorOption& option)
     {
         file_cnt = 0;
         total_file_size = 0;
 
-        if (create_junk)
+        if (option.create_junk_file)
         {
             if (auto st = CreateJunkFiles(output_base_path_); !st)
                 return st;
         }
 
         std::vector<std::filesystem::path> dir_pool;
-        BuildDirectoryPool(first_level_dir_count, max_dir_depth, dir_pool);
+        BuildDirectoryPool(option.first_level_dir_count, option.max_dir_depth, dir_pool);
 
         if (dir_pool.empty())
         {
-            std::println("directory pool is empty, cannot create any files");
+            std::println(std::cerr,"directory pool is empty, cannot create any files");
             return false;
         }
         std::uniform_int_distribution<uint64_t> dir_choose{0, dir_pool.size() - 1};
-        std::uniform_int_distribution<uint64_t> file_size_dist{min_file_size, max_file_size};
+        std::uniform_int_distribution<uint64_t> file_size_dist{option.min_file_size, option.max_file_size};
 
-        const uint64_t digits = calc_digit_width(file_count);
+        const uint64_t digits = calc_digit_width(option.file_count);
 
-        for (uint64_t i = 0; i < file_count; ++i)
+        for (uint64_t i = 0; i < option.file_count; ++i)
         {
             const auto& target_dir = dir_pool[dir_choose(*gen_)];
-            auto file_path = target_dir / std::format("rand_file_{:0{}}.bin", i, digits);
-            const auto file_sz = file_size_dist(*gen_);
-
-            if (const auto res = WriteRandomFile(file_path, file_sz, compress); !res)
+            // generator a .tar file every option.special_file_interval files
+            std::string_view file_type = (i % option.compressed_file_interval == 0) ? kCompressedFileSuffix : kNormalFileSuffix;
+            auto file_path = target_dir / std::format("rand_file_{:0{}}.{}", i, digits, file_type);
+            uint64_t file_size = file_size_dist(*gen_);
+            // if enable to create generator zero file, generator every option.special_file_interval files
+            if (option.create_zero_file && (i % option.zero_file_interval) == 0)
+            {
+                file_size = 0;
+            }
+            if (const auto res = WriteRandomFile(file_path, file_size, option.compress_level); !res)
             {
                 return res;
             }
-            total_file_size += file_sz;
+            total_file_size += file_size;
             file_cnt += 1;
         }
         return true;
     }
-
 
     [[nodiscard]] bool FileGenerator::CheckPresetFilesReady() const
     {
@@ -577,4 +561,4 @@ namespace ctar::test
     }
 
 
-} // namespace ctar
+} // namespace ctar::test

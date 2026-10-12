@@ -16,8 +16,8 @@ namespace ctar
     TEST_P(Next4kAlignTest, CheckAlignValue)
     {
         auto param = GetParam();
-        const uint64_t actual = ctar::next_4k_align(param.input);
-        ASSERT_EQ(actual, param.expect) << "input = " << param.input;
+        const uint64_t actual = next_4k_align(param.input);
+        ASSERT_EQ(actual, param.expect);
     }
 
     INSTANTIATE_TEST_SUITE_P(AlignCases, Next4kAlignTest,
@@ -35,14 +35,14 @@ namespace ctar
 
     struct NestedStruct
     {
-        int32_t  x;
+        int32_t x;
         TestStruct inner;
     };
 
     TEST(FieldSize, FixedFieldSize)
     {
         constexpr TestStruct obj{};
-        ASSERT_EQ(FixedFieldTotalSize(obj.a), 1);
+        ASSERT_EQ(FixedFieldTotalSize(obj.a), 1) << "size of uint8_t is not equal to 1 byte";
         ASSERT_EQ(FixedFieldTotalSize(obj.b), 2);
         ASSERT_EQ(FixedFieldTotalSize(obj.c), 4);
         ASSERT_EQ(FixedFieldTotalSize(obj.d), 8);
@@ -57,9 +57,9 @@ namespace ctar
         ASSERT_EQ(FixedFieldTotalSize(ns.x, ns.inner.a, ns.inner.b, ns.inner.c, ns.inner.d), 19U);
     }
 
-    TEST(SerializeSize,VectorUint8)
+    TEST(SerializeSize, VectorUint8)
     {
-        std::vector<uint8_t> vec{1,2,3};
+        std::vector<uint8_t> vec{1, 2, 3};
         ASSERT_EQ(ContainerSerializedSize(vec), 8U + 3U);
     }
 
@@ -76,25 +76,23 @@ namespace ctar
         std::vector<uint8_t> v1(2);
         std::vector<uint16_t> v2(3);
         // v1:8+2; v2:8+3*2=14; total 10+14=24
-        ASSERT_EQ(ContainerSerializedTotalSize(v1,v2), 24U);
+        ASSERT_EQ(ContainerSerializedTotalSize(v1, v2), 24U);
     }
 
     TEST(SerializeSize, StringContainer)
     {
         std::string str{"hello"};
-        // char元素，长度5；8+5 =13
+        // Serialized layout: uint64_t length field (8 bytes) + string payload (5 bytes)
         ASSERT_EQ(ContainerSerializedSize(str), 8U + 5U);
     }
 
-
-    TEST(SkipJunkFile,HitJunkFile)
+    TEST(SkipJunkFile, HitJunkFile)
     {
         fs::directory_entry entry1{"tmp/.DS_Store"};
         EXPECT_TRUE(is_skip_entry(entry1));
 
         fs::directory_entry entry2{"tmp/.other"};
         EXPECT_FALSE(is_skip_entry(entry2));
-
     }
 
 
@@ -124,7 +122,7 @@ namespace ctar
         EXPECT_EQ(out.size(), 12U);
         EXPECT_TRUE(out.find(':') != std::string::npos);
     }
-}
+} // namespace ctar
 
 
 int main(int argc, char** argv)

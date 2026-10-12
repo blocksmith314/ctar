@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <numeric>
 #include <string>
+
 #include "gtest/gtest.h"
 #include "src/utils/serialize_helper.h"
 #include "src/utils/status.h"
@@ -11,6 +13,7 @@ namespace ctar
 {
     namespace fs = std::filesystem;
     fs::path test_root_path{"file_generator_test"};
+
     class FileGeneratorTest : public ::testing::Test
     {
     protected:
@@ -30,6 +33,7 @@ namespace ctar
             size_t min_file_size;
             size_t max_file_size;
         };
+
         static ResultStatus<DirMeta> GetDirMetaOfPath(const fs::path& dir)
         {
             std::error_code ec;
@@ -94,10 +98,14 @@ namespace ctar
     TEST_F(FileGeneratorTest, GenerateRandomFilesWithFirstLevelDir)
     {
         test::FileGenerator gen(test_root_path);
-        size_t file_count = 100;
-        size_t min_file_size = 1024;
-        size_t max_file_size = 2048;
-        auto st = gen.GenerateRandomFiles(3, 2, file_count, min_file_size, max_file_size, false);
+        test::GeneratorOption option;
+        option.file_count = 100;
+        option.min_file_size = 1024;
+        option.max_file_size = 2048;
+        option.first_level_dir_count = 3;
+        option.max_dir_depth = 2;
+        option.create_junk_file = false;
+        auto st = gen.GenerateRandomFiles(option);
         ASSERT_TRUE(st);
         EXPECT_TRUE(fs::exists(test_root_path / "level1_0"));
         EXPECT_TRUE(fs::exists(test_root_path / "level1_1"));
@@ -105,18 +113,23 @@ namespace ctar
         auto dir_meta_res = GetDirMetaOfPath(test_root_path);
         ASSERT_TRUE(dir_meta_res.has_value()) << "Count files error: " << dir_meta_res.error().message();
         auto dir_meta = dir_meta_res.value();
-        EXPECT_EQ(dir_meta.total_file_cnt, file_count);
-        EXPECT_GE(dir_meta.min_file_size, min_file_size);
-        EXPECT_LE(dir_meta.max_file_size, max_file_size);
+        EXPECT_EQ(dir_meta.total_file_cnt, option.file_count);
+        EXPECT_GE(dir_meta.min_file_size, option.min_file_size);
+        EXPECT_LE(dir_meta.max_file_size, option.max_file_size);
     }
 
     TEST_F(FileGeneratorTest, GenerateCompressionFriendlyFiles)
     {
         test::FileGenerator gen(test_root_path);
-        size_t file_count = 3;
-        size_t min_file_size = 4096;
-        size_t max_file_size = 4096;
-        auto st = gen.GenerateRandomFiles(1, 1, 3, 4096, 4096, false, test::CompressLevel::HighCompress);
+        test::GeneratorOption option;
+        option.file_count = 3;
+        option.min_file_size = 4096;
+        option.max_file_size = 4096;
+        option.first_level_dir_count = 1;
+        option.max_dir_depth = 1;
+        option.create_junk_file = false;
+        option.compress_level = test::CompressLevel::HighCompress;
+        auto st = gen.GenerateRandomFiles(option);
         ASSERT_TRUE(st);
 
         std::error_code ec;
@@ -132,8 +145,9 @@ namespace ctar
                 found = true;
                 std::ifstream input(p, std::ios::binary);
                 ASSERT_TRUE(input) << "Cannot open " << p;
-
-                std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                std::stringstream ss;
+                ss << input.rdbuf();
+                std::string content = ss.str();
                 ASSERT_EQ(content.size(), 4096U);
                 EXPECT_GT(std::ranges::count(content.begin(), content.end(), 'A'), 4000);
                 break;
@@ -144,16 +158,23 @@ namespace ctar
         auto dir_meta_res = GetDirMetaOfPath(test_root_path);
         ASSERT_TRUE(dir_meta_res.has_value()) << "Count files error: " << dir_meta_res.error().message();
         auto dir_meta = dir_meta_res.value();
-        EXPECT_EQ(dir_meta.total_file_cnt, file_count);
-        EXPECT_GE(dir_meta.min_file_size, min_file_size);
-        EXPECT_LE(dir_meta.max_file_size, max_file_size);
+        EXPECT_EQ(dir_meta.total_file_cnt, option.file_count);
+        EXPECT_GE(dir_meta.min_file_size, option.min_file_size);
+        EXPECT_LE(dir_meta.max_file_size, option.max_file_size);
     }
 
 
     TEST_F(FileGeneratorTest, NoFirstLevelFolder)
     {
         test::FileGenerator gen(test_root_path);
-        auto st = gen.GenerateRandomFiles(0, 1, 50, 512, 1024, false);
+        test::GeneratorOption option;
+        option.first_level_dir_count = 0;
+        option.max_dir_depth = 1;
+        option.file_count = 50;
+        option.min_file_size = 512;
+        option.max_file_size = 1024;
+        option.create_junk_file = false;
+        auto st = gen.GenerateRandomFiles(option);
         ASSERT_TRUE(st);
         int file_count = 0;
         for (auto& entry : fs::directory_iterator(test_root_path))
@@ -161,17 +182,24 @@ namespace ctar
             if (entry.is_regular_file())
                 file_count++;
         }
-        EXPECT_GE(file_count, 1);
+        EXPECT_EQ(file_count, option.file_count);
     }
 
     TEST_F(FileGeneratorTest, JunkFileOnlyCreatedOnce)
     {
         test::FileGenerator gen(test_root_path);
-        auto st = gen.GenerateRandomFiles(2, 1, 20, 512, 1024, true);
+        test::GeneratorOption option;
+        option.first_level_dir_count = 2;
+        option.max_dir_depth = 1;
+        option.file_count = 20;
+        option.min_file_size = 512;
+        option.max_file_size = 1024;
+        option.create_junk_file = true;
+        auto st = gen.GenerateRandomFiles(option);
         ASSERT_TRUE(st);
         std::error_code ec;
-        size_t junk_count_before = 0;
-        for (const auto& entry : fs::directory_iterator(test_root_path, ec))
+        size_t junk_file_count = 0;
+        for (const auto& entry : fs::recursive_directory_iterator(test_root_path, ec))
         {
             ASSERT_FALSE(ec);
             if (entry.is_regular_file(ec))
@@ -180,28 +208,73 @@ namespace ctar
                 {
                     if (junk_file == entry.path().filename())
                     {
-                        junk_count_before++;
+                        junk_file_count++;
                     }
                 }
             }
         }
-        ASSERT_GT(junk_count_before, 0U) << "Junk files were not created";
+        ASSERT_EQ(junk_file_count, junk_files.size()) << "Junk files were not created";
+    }
+
+
+    TEST_F(FileGeneratorTest, SpecialFile)
+    {
+        test::FileGenerator gen(test_root_path);
+        test::GeneratorOption option;
+        option.first_level_dir_count = 2;
+        option.max_dir_depth = 1;
+        option.file_count = 201;
+        option.min_file_size = 20;
+        option.max_file_size = 512;
+        option.create_junk_file = false;
+        option.create_zero_file = true;
+        auto st = gen.GenerateRandomFiles(option);
+        ASSERT_TRUE(st);
+        std::error_code ec;
+        size_t zero_size_file_cnt = 0;
+        size_t tar_file_cnt = 0;
+        for (const auto& entry : fs::recursive_directory_iterator(test_root_path, ec))
+        {
+            ASSERT_FALSE(ec);
+            if (entry.is_regular_file(ec))
+            {
+                if (entry.file_size() == 0)
+                {
+                    zero_size_file_cnt++;
+                }
+                if (entry.path().filename().string().ends_with(test::kCompressedFileSuffix))
+                {
+                    tar_file_cnt++;
+                }
+            }
+        }
+        ASSERT_EQ(zero_size_file_cnt, (option.file_count + option.zero_file_interval - 1) / option.zero_file_interval)
+            << "zero size files were not created";
+
+        ASSERT_EQ(tar_file_cnt,
+                  (option.file_count + option.compressed_file_interval - 1) / option.compressed_file_interval)
+            << "compressed file were not created";
     }
 
     TEST_F(FileGeneratorTest, Batch)
     {
         test::FileGenerator gen(test_root_path);
-        size_t file_count = 10000;
-        size_t min_file_size = 512;
-        size_t max_file_size = 1024000;
-        auto st = gen.GenerateRandomFiles(2, 1, file_count, min_file_size, max_file_size, true);
+
+        test::GeneratorOption option;
+        option.first_level_dir_count = 2;
+        option.max_dir_depth = 1;
+        option.file_count = 10000;
+        option.min_file_size = 512;
+        option.max_file_size = 1024000;
+        option.create_junk_file = true;
+        auto st = gen.GenerateRandomFiles(option);
         ASSERT_TRUE(st);
         auto dir_meta_res = GetDirMetaOfPath(test_root_path);
         ASSERT_TRUE(dir_meta_res.has_value()) << "Count files error: " << dir_meta_res.error().message();
         auto dir_meta = dir_meta_res.value();
-        EXPECT_GE(dir_meta.total_file_cnt, file_count);
-        EXPECT_GE(dir_meta.min_file_size, min_file_size);
-        EXPECT_LE(dir_meta.max_file_size, max_file_size);
+        EXPECT_GE(dir_meta.total_file_cnt, option.file_count);
+        EXPECT_GE(dir_meta.min_file_size, option.min_file_size);
+        EXPECT_LE(dir_meta.max_file_size, option.max_file_size);
     }
 
 } // namespace ctar
