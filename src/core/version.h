@@ -14,7 +14,7 @@ namespace ctar
     // all agree.
     constexpr uint8_t kToolVersionMajor = 1;
     constexpr uint8_t kToolVersionMinor = 0;
-    constexpr uint8_t kToolVersionPatch = 0;
+    constexpr uint8_t kToolVersionPatch = 1;
 
     // On-disk archive format version, stamped into every archive header.
     // Bump this ONLY when the byte layout changes -- never to match the tool
