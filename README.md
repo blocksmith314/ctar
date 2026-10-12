@@ -57,7 +57,7 @@ Visit the [Releases](https://github.com/blocksmith314/ctar/releases) page and do
 
 Run the script below in your terminal to download, deploy and install the binary to system PATH automatically:
 ```shell
-VERSION=v1.0.0
+VERSION=v1.0.1
 BASE=https://github.com/blocksmith314/ctar/releases/download/$VERSION
 # Linux x86_64
 curl -sSL -O "$BASE/ctar-$VERSION-linux-x86_64"

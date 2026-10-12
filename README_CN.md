@@ -53,7 +53,7 @@ ctar（Cloud-era Tar）是一款受传统 tar 启发的现代归档工具，主�
 在终端执行以下脚本，自动下载、部署并将程序安装到系统 PATH：
 
 ```shell
-VERSION=v1.0.0
+VERSION=v1.0.1
 BASE=https://github.com/blocksmith314/ctar/releases/download/$VERSION
 # Linux x86_64
 curl -sSL -O "$BASE/ctar-$VERSION-linux-x86_64"
