@@ -10,9 +10,9 @@
 #include <unordered_map>
 
 #include "options.h"
-#include "version.h"
 #include "sorted_map.h"
 #include "src/utils/status.h"
+#include "version.h"
 
 
 namespace ctar
@@ -39,13 +39,72 @@ namespace ctar
         TSV = 2,
     };
 
-    inline constexpr std::string_view kTsvMetaHeader =
-        "block_id\tdir_id\tfile_id\tpermissions\towner\tgroup\tmodify_time\toffset\toriginal_size\tcompressed_"
-        "size\tdir_name\tfile_name\n";
 
-    constexpr uint8_t kListColumnSize = 6;
 
-    constexpr uint8_t kTsvColumnSize = 12;
+    constexpr std::array<std::string_view, 12> kTsvColumnNames = {
+        "block_id",    "dir_id", "file_id",       "permissions",     "owner",    "group",
+        "modify_time", "offset", "original_size", "compressed_size", "dir_name", "file_name"};
+
+    consteval auto BuildTsvHeader()
+    {
+        constexpr size_t total = std::accumulate(kTsvColumnNames.begin(), kTsvColumnNames.end(),
+                                                 kTsvColumnNames.size(), // N-1 tabs + 1 newline
+                                                 [](size_t acc, std::string_view name) { return acc + name.size(); });
+
+        std::array<char, total> buffer{};
+        size_t pos = 0;
+        for (size_t i = 0; i < kTsvColumnNames.size(); ++i)
+        {
+            for (const char c : kTsvColumnNames[i])
+            {
+                buffer[pos++] = c;
+            }
+            buffer[pos++] = (i + 1 == kTsvColumnNames.size()) ? '\n' : '\t';
+        }
+        return buffer;
+    }
+
+    inline constexpr auto kTsvHeaderBuffer = BuildTsvHeader();
+
+    inline constexpr std::string_view kTsvMetaHeader{kTsvHeaderBuffer.data(), kTsvHeaderBuffer.size()};
+
+    inline constexpr std::string_view kTsvRowFormat = "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n";
+
+    consteval size_t CountTsvFields(std::string_view fmt)
+    {
+        size_t n = 0;
+        for (size_t i = 0; i + 1 < fmt.size(); ++i)
+            if (fmt[i] == '{' && fmt[i + 1] == '}')
+            {
+                ++n;
+                ++i;
+            }
+        return n;
+    }
+
+    constexpr size_t kTsvColumnSize = CountTsvFields(kTsvRowFormat);
+
+
+    constexpr std::array<std::string_view, 6> kListColumnNames = {"perm",     "owner",    "group", "format_file_size",
+                                                              "time_str", "file_path"};
+
+    inline constexpr std::string_view kListRowFormat = "{:10}  {:<{}}  {:<{}}  {:>{}}  {:<12}  {}/{}\n";
+
+    consteval size_t CountListFields(std::string_view fmt)
+    {
+        size_t n = 1;
+        for (size_t i = 0; i + 1 < fmt.size(); ++i)
+            if (fmt[i] == ' ' && fmt[i + 1] == ' ')
+            {
+                ++n;
+                ++i;
+            }
+        return n;
+    }
+
+    constexpr uint8_t kListColumnSize = CountListFields(kListRowFormat);
+
+
 
     /// @brief Stores calculated maximum column widths for LIST formatted directory output
     struct ListColWidths
@@ -54,7 +113,6 @@ namespace ctar
         size_t group_name_width;
         size_t file_size_width;
     };
-
 
     /**
      * @brief Non‑owning reference pair of directory and its child file entry.
