@@ -99,40 +99,44 @@ namespace ctar
         std::string pack_file = pack_dir_ / "random_file.ctar";
         fs::path unpack_dir_{"random_unpack_test_dir"};
 
-        size_t test_file_count_ = 1000;
-        size_t first_level_dir_count_ = 10;
-        size_t max_dir_depth_ = 5;
-        size_t min_file_size_ = 128;
-        size_t max_file_size_ = 2048000;
-        size_t create_junk_ = false;
+        test::GeneratorOption option_;
 
     protected:
         void SetUp() override
         {
-
             if (fs::exists(source_dir_))
             {
                 fs::remove_all(source_dir_);
             }
+
             if (fs::exists(pack_dir_))
             {
                 fs::remove_all(pack_dir_);
             }
+
             if (fs::exists(unpack_dir_))
             {
                 fs::remove_all(unpack_dir_);
             }
+
             fs::create_directories(source_dir_);
             fs::create_directories(pack_dir_);
             fs::create_directories(unpack_dir_);
 
             test::FileGenerator generator_random(source_dir_);
-            if (auto st = generator_random.GenerateRandomFiles(first_level_dir_count_, max_dir_depth_, test_file_count_,
-                                                               min_file_size_, max_file_size_, create_junk_);
+            option_.first_level_dir_count = 10;
+            option_.max_dir_depth = 5;
+            option_.file_count = 1000;
+            option_.min_file_size = 128;
+            option_.max_file_size = 2048000;
+            option_.create_junk_file = false;
+
+            if (auto st = generator_random.GenerateRandomFiles(option_);
                 !st)
             {
                 throw std::runtime_error("failed to generate preset files");
             }
+
             std::println(std::cout, "generator count of file: {}, file_size: {}", generator_random.file_cnt,
                          generator_random.total_file_size);
         }

@@ -19,6 +19,7 @@ namespace ctar::test
         size_t bytes_per_file_{256};
         size_t bytes_per_line_{32};
 
+
         fs::path source_dir_{"preset_file_test_dir"};
         fs::path pack_dir_{"preset_target_test_dir"};
         std::string pack_file = (pack_dir_ / "preset_file.ctar").string();
@@ -57,11 +58,6 @@ namespace ctar::test
             generator_file_cnt = generator_preset.file_cnt;
         }
 
-        void TearDown() override
-        {
-            // CleanAllDirectories();
-        }
-
         void CleanAllDirectories() const
         {
             if (fs::exists(source_dir_))
@@ -72,7 +68,12 @@ namespace ctar::test
                 fs::remove_all(unpack_dir_);
         }
 
-        static std::vector<std::string> split_path_components(const std::string& path)
+        void TearDown() override
+        {
+            CleanAllDirectories();
+        }
+
+        static std::vector<std::string> split_path_components(std::string_view path)
         {
             std::vector<std::string> parts;
             std::string temp;

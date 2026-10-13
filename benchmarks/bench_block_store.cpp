@@ -15,6 +15,7 @@ namespace
     constexpr size_t kMaxFileSize = 2048000ULL;
     constexpr bool kCreateJunk = false;
 
+
     void CleanupDirs(const std::initializer_list<fs::path> dirs)
     {
         for (const auto& d : dirs)
@@ -38,7 +39,15 @@ static void BM_Pack(benchmark::State& state)
 
     uint64_t total_bytes = 0;
     uint64_t total_files = 0;
-
+    ctar::test::GeneratorOption option;
+    option.first_level_dir_count = kFirstLevelDirs;
+    option.max_dir_depth = kMaxDirDepth;
+    option.file_count = file_count;
+    option.min_file_size = kMinFileSize;
+    option.max_file_size = kMaxFileSize;
+    option.create_junk_file = kCreateJunk;
+    option.create_junk_file = kCreateJunk;
+    option.compress_level = ctar::test::CompressLevel::MediumCompress;
     for (auto _ : state)
     {
         state.PauseTiming();
@@ -48,8 +57,8 @@ static void BM_Pack(benchmark::State& state)
             fs::remove(pack_file);
 
         ctar::test::FileGenerator gen(source_dir);
-        auto st = gen.GenerateRandomFiles(kFirstLevelDirs, kMaxDirDepth, file_count, kMinFileSize, kMaxFileSize,
-                                          kCreateJunk, ctar::test::CompressLevel::MediumCompress);
+
+        auto st = gen.GenerateRandomFiles(option);
         if (!st)
         {
             state.SkipWithError("Failed to generate test files");
