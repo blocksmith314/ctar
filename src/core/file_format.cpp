@@ -1,8 +1,8 @@
+#include <cerrno>
+#include <cstring>
 #include <grp.h>
 #include <pwd.h>
 #include <ranges>
-#include <cstring>
-#include <cerrno>
 #include <sys/stat.h>
 
 #include "file_format.h"
@@ -41,18 +41,18 @@ namespace ctar
             perm.reserve(10);
             perm += entry_type == EntryType::DIRECTORY ? 'd' : '-';
             perm += PermBitsToString(permissions);
-            static_assert(kListColumnSize == 6, "LIST column count mismatch, update kListColumnSize");
-            std::format_to(it, "{:10}  {:<{}}  {:<{}}  {:>{}}  {:<12}  {}/{}\n", perm, owner,
+            static_assert(kListColumnSize == kListColumnNames.size(), "LIST column count mismatch, update kListColumnSize");
+            std::format_to(it, kListRowFormat, perm, owner,
                            col_widths.owner_name_width, group, col_widths.group_name_width, format_file_size,
                            col_widths.file_size_width, time_str, dir_file_ref.dir_name, dir_file_ref.file_name);
         }
         else
         {
             // block_id,dir_id,file_id,permissions,owner,group,modify_time,offset,original_size,compressed_size,dir_name,file_name
-            static_assert(kTsvColumnSize == 12, "TSV column count mismatch, update kTsvColumnSize");
-            std::format_to(it, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", block_id, dir_file_ref.dir_id,
-                           dir_file_ref.file_id, permissions, owner, group, modify_time, offset, file_orig_size,
-                           file_compressed_size, dir_file_ref.dir_name, dir_file_ref.file_name);
+            static_assert(kTsvColumnSize == kTsvColumnNames.size(), "TSV column count mismatch, update kTsvColumnSize");
+            std::format_to(it, kTsvRowFormat, block_id, dir_file_ref.dir_id, dir_file_ref.file_id, permissions, owner,
+                           group, modify_time, offset, file_orig_size, file_compressed_size, dir_file_ref.dir_name,
+                           dir_file_ref.file_name);
         }
     }
 
@@ -81,7 +81,10 @@ namespace ctar
         return {};
     }
 
-    size_t PackFileHeader::SerializedSize() const { return FixedFieldTotalSize(magic_number, file_format_version, file_meta_size); }
+    size_t PackFileHeader::SerializedSize() const
+    {
+        return FixedFieldTotalSize(magic_number, file_format_version, file_meta_size);
+    }
 
 
     size_t DataBlockMeta::SerializedSize() const
