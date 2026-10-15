@@ -14,9 +14,86 @@
 #include "src/utils/status.h"
 #include "version.h"
 
-
 namespace ctar
 {
+
+
+    namespace tsv
+    {
+        constexpr std::array<std::string_view, 12> kTsvColumnNames = {
+            "block_id",    "dir_id", "file_id",       "permissions",     "owner",    "group",
+            "modify_time", "offset", "original_size", "compressed_size", "dir_name", "file_name"};
+
+        consteval auto BuildTsvHeader()
+        {
+            constexpr size_t total =
+                std::accumulate(kTsvColumnNames.begin(), kTsvColumnNames.end(),
+                                kTsvColumnNames.size(), // N-1 tabs + 1 newline
+                                [](size_t acc, std::string_view name) { return acc + name.size(); });
+
+            std::array<char, total> buffer{};
+            size_t pos = 0;
+            for (size_t i = 0; i < kTsvColumnNames.size(); ++i)
+            {
+                for (const char c : kTsvColumnNames[i])
+                {
+                    buffer[pos++] = c;
+                }
+                buffer[pos++] = (i + 1 == kTsvColumnNames.size()) ? '\n' : '\t';
+            }
+            return buffer;
+        }
+
+        inline constexpr auto kTsvHeaderBuffer = BuildTsvHeader();
+
+        inline constexpr std::string_view kTsvHeaderName{kTsvHeaderBuffer.data(), kTsvHeaderBuffer.size()};
+
+        inline constexpr std::string_view kTsvRowFormat = "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n";
+
+        consteval size_t CountTsvFields(std::string_view fmt)
+        {
+            size_t n = 0;
+            for (size_t i = 0; i + 1 < fmt.size(); ++i)
+                if (fmt[i] == '{' && fmt[i + 1] == '}')
+                {
+                    ++n;
+                    ++i;
+                }
+            return n;
+        }
+
+        constexpr size_t kTsvColumnSize = CountTsvFields(kTsvRowFormat);
+
+        static_assert(kTsvColumnSize == kTsvColumnNames.size(), "TSV column count mismatch, update kTsvColumnSize");
+
+    } // namespace tsv
+
+    namespace list
+    {
+        constexpr std::array<std::string_view, 6> kListColumnNames = {
+            "perm", "owner", "group", "format_file_size", "time_str", "file_path"};
+
+        inline constexpr std::string_view kListRowFormat = "{:10}  {:<{}}  {:<{}}  {:>{}}  {:<12}  {}/{}\n";
+
+        consteval size_t CountListFields(std::string_view fmt)
+        {
+            size_t n = 1;
+            for (size_t i = 0; i + 1 < fmt.size(); ++i)
+                if (fmt[i] == ' ' && fmt[i + 1] == ' ')
+                {
+                    ++n;
+                    ++i;
+                }
+            return n;
+        }
+
+        constexpr uint8_t kListColumnSize = CountListFields(kListRowFormat);
+
+        static_assert(kListColumnSize == kListColumnNames.size(), "LIST column count mismatch, update kListColumnSize");
+
+
+    } // namespace list
+
     namespace fs = std::filesystem;
     constexpr std::string_view blue_start = "\033[34m";
     constexpr std::string_view color_reset = "\033[0m";
@@ -25,12 +102,7 @@ namespace ctar
     constexpr entry_id_t kRootDirId = 1;
     constexpr entry_id_t kFileBeginId = 1;
 
-
-    enum class EntryType : uint16_t
-    {
-        REGULAR = 0,
-        DIRECTORY = 1,
-    };
+    constexpr std::vector<entry_id_t> empty_vec;
 
     enum class OutputMode : uint8_t
     {
@@ -38,73 +110,6 @@ namespace ctar
         LIST = 1,
         TSV = 2,
     };
-
-
-
-    constexpr std::array<std::string_view, 12> kTsvColumnNames = {
-        "block_id",    "dir_id", "file_id",       "permissions",     "owner",    "group",
-        "modify_time", "offset", "original_size", "compressed_size", "dir_name", "file_name"};
-
-    consteval auto BuildTsvHeader()
-    {
-        constexpr size_t total = std::accumulate(kTsvColumnNames.begin(), kTsvColumnNames.end(),
-                                                 kTsvColumnNames.size(), // N-1 tabs + 1 newline
-                                                 [](size_t acc, std::string_view name) { return acc + name.size(); });
-
-        std::array<char, total> buffer{};
-        size_t pos = 0;
-        for (size_t i = 0; i < kTsvColumnNames.size(); ++i)
-        {
-            for (const char c : kTsvColumnNames[i])
-            {
-                buffer[pos++] = c;
-            }
-            buffer[pos++] = (i + 1 == kTsvColumnNames.size()) ? '\n' : '\t';
-        }
-        return buffer;
-    }
-
-    inline constexpr auto kTsvHeaderBuffer = BuildTsvHeader();
-
-    inline constexpr std::string_view kTsvMetaHeader{kTsvHeaderBuffer.data(), kTsvHeaderBuffer.size()};
-
-    inline constexpr std::string_view kTsvRowFormat = "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n";
-
-    consteval size_t CountTsvFields(std::string_view fmt)
-    {
-        size_t n = 0;
-        for (size_t i = 0; i + 1 < fmt.size(); ++i)
-            if (fmt[i] == '{' && fmt[i + 1] == '}')
-            {
-                ++n;
-                ++i;
-            }
-        return n;
-    }
-
-    constexpr size_t kTsvColumnSize = CountTsvFields(kTsvRowFormat);
-
-
-    constexpr std::array<std::string_view, 6> kListColumnNames = {"perm",     "owner",    "group", "format_file_size",
-                                                              "time_str", "file_path"};
-
-    inline constexpr std::string_view kListRowFormat = "{:10}  {:<{}}  {:<{}}  {:>{}}  {:<12}  {}/{}\n";
-
-    consteval size_t CountListFields(std::string_view fmt)
-    {
-        size_t n = 1;
-        for (size_t i = 0; i + 1 < fmt.size(); ++i)
-            if (fmt[i] == ' ' && fmt[i + 1] == ' ')
-            {
-                ++n;
-                ++i;
-            }
-        return n;
-    }
-
-    constexpr uint8_t kListColumnSize = CountListFields(kListRowFormat);
-
-
 
     /// @brief Stores calculated maximum column widths for LIST formatted directory output
     struct ListColWidths
@@ -114,16 +119,21 @@ namespace ctar
         size_t file_size_width;
     };
 
-    /**
-     * @brief Non‑owning reference pair of directory and its child file entry.
-     * @note String views reference external buffer; do not persist beyond buffer lifetime.
-     */
+
+    /// @brief Non‑owning reference pair of directory and its child file entry.
+    /// @note String views reference external buffer; do not persist beyond buffer lifetime.
     struct DirFileRef
     {
         entry_id_t dir_id;
         std::string_view dir_name;
         entry_id_t file_id;
         std::string_view file_name;
+    };
+
+    enum class EntryType : uint32_t
+    {
+        REGULAR = 0,
+        DIRECTORY = 1,
     };
 
     struct EntryMeta
@@ -150,34 +160,18 @@ namespace ctar
     };
 
 
-    inline size_t SafeStrLen(const char* buf, size_t buf_size) noexcept
-    {
-        if (buf == nullptr || buf_size == 0)
-        {
-            return 0;
-        }
-        for (size_t i = 0; i < buf_size; ++i)
-        {
-            if (buf[i] == '\0')
-            {
-                return i;
-            }
-        }
-        return buf_size;
-    }
-
     struct Handle
     {
         uint64_t offset;
         uint64_t len;
     };
 
-    /// @brief Filesystem entry record, represents either file or directory    struct EntryRecord
+    // @brief Filesystem entry record, represents either file or directory    struct EntryRecord
     struct EntryRecord
     {
-        /// Handle pointing to path‑name string (file name or directory path)
+        // Handle pointing to path‑name string (file name or directory path)
         Handle name_handle;
-        /// Metadata for entry, valid for both file and directory
+        // Metadata for entry, valid for both file and directory
         EntryMeta entry_meta;
     };
 

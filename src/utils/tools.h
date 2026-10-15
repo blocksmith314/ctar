@@ -99,6 +99,22 @@ namespace ctar
         return HumanReadableBytes(throughput);
     }
 
+    inline size_t SafeStrLen(const char* buf, size_t buf_size) noexcept
+    {
+        if (buf == nullptr || buf_size == 0)
+        {
+            return 0;
+        }
+        for (size_t i = 0; i < buf_size; ++i)
+        {
+            if (buf[i] == '\0')
+            {
+                return i;
+            }
+        }
+        return buf_size;
+    }
+
 } // namespace ctar
 
 #endif // CTAR_TOOLS_H

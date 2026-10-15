@@ -453,7 +453,7 @@ namespace ctar
                 continue;
             }
             auto row = test::SplitView(output_line, ' ');
-            ASSERT_GT(row.size(), kListColumnSize);
+            ASSERT_GT(row.size(), list::kListColumnSize);
             auto file_path = std::string(row[row.size() - 1]);
             ASSERT_TRUE(test::ContainsElement(file_paths, file_path));
         }
@@ -479,14 +479,14 @@ namespace ctar
                 continue;
             }
             auto row = test::SplitView(output_line, '\t');
-            ASSERT_EQ(row.size(), kTsvColumnSize);
+            ASSERT_EQ(row.size(), tsv::kTsvColumnSize);
             uint32_t permissions = std::stoll(std::string(row[3]));
             std::string file_owner_name = std::string(row[4]);
             std::string file_group_name = std::string(row[5]);
             auto file_modify_time = std::stoll(std::string(row[6]));
             auto file_size = std::stoll(std::string(row[8]));
-            auto dir_path = std::string(row[kTsvColumnSize - 2]);
-            auto file_name = std::string(row[kTsvColumnSize - 1]);
+            auto dir_path = std::string(row[tsv::kTsvColumnSize - 2]);
+            auto file_name = std::string(row[tsv::kTsvColumnSize - 1]);
             auto file_path = std::format("{}/{}",dir_path,file_name);
 
             ASSERT_EQ(fs::file_size(file_path), file_size);
