@@ -611,7 +611,7 @@ namespace ctar
         {
             EXPECT_NE(dump_text.find(keyword), std::string::npos) << "dump output missing keyword: " << keyword;
         }
-        EXPECT_NE(dump_text.find(kTsvMetaHeader), std::string::npos) << "Dump output missing TSV header";
+        EXPECT_NE(dump_text.find(tsv::kTsvHeaderName), std::string::npos) << "Dump output missing TSV header";
     }
 
 
