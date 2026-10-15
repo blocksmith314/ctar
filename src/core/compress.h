@@ -16,8 +16,7 @@ namespace ctar
 
     static_assert(kLZ4HCDefault == LZ4HC_CLEVEL_DEFAULT, "kLZ4HCDefault mismatch with LZ4HC_CLEVEL_DEFAULT");
     static_assert(kLZ4HCMax == LZ4HC_CLEVEL_MAX, "kLZ4HCMax mismatch with LZ4HC_CLEVEL_MAX");
-    static_assert(static_cast<uint64_t>(kMaxCompressFileSize) == static_cast<uint64_t>(LZ4_MAX_INPUT_SIZE),
-                  "kMaxCompressFileSize must match the LZ4 input limit");
+    static_assert(kMaxInputSize == LZ4_MAX_INPUT_SIZE, "kMaxInputSize must match the LZ4_MAX_INPUT_SIZE");
 
     namespace compress
     {

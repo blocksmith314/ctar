@@ -5,6 +5,43 @@
 namespace ctar
 {
 
+
+    TEST(CompressTest, MaxCompressBufferSize)
+    {
+        uint64_t input_size = 100;
+        uint64_t dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4, input_size);
+        ASSERT_GT(dst_capacity, input_size);
+        dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4HC, input_size);
+        ASSERT_GT(dst_capacity, input_size);
+        dst_capacity = compress::MaxCompressBufferSize(CompressionType::kNone, input_size);
+        ASSERT_EQ(dst_capacity, input_size);
+
+        input_size = LZ4_MAX_INPUT_SIZE + 1;
+        dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4, input_size);
+        ASSERT_EQ(dst_capacity, input_size);
+        dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4HC, input_size);
+        ASSERT_EQ(dst_capacity, input_size);
+    }
+
+    TEST(CompressTest, BiggerThanMaxInputSize)
+    {
+        // We only allocate 1M dummy input buffer;
+        // Compress validates src_size first and returns early without reading input or writing output.
+        const std::string dummy_input(1024 * 1024, 'A');
+        constexpr size_t big_input_size = static_cast<size_t>(LZ4_MAX_INPUT_SIZE) + 1;
+        const auto dst_capacity = compress::MaxCompressBufferSize(CompressionType::kLZ4, dummy_input.size());
+        std::string compressed(static_cast<size_t>(dst_capacity), '\0');
+
+        // src_size exceeds LZ4_MAX_INPUT_SIZE, compression should fail and return 0
+        auto compressed_size =
+            compress::Compress(CompressionType::kLZ4, dummy_input.data(), compressed.data(), big_input_size);
+        ASSERT_EQ(compressed_size, 0);
+        compressed_size =
+            compress::Compress(CompressionType::kLZ4HC, dummy_input.data(), compressed.data(), big_input_size);
+        ASSERT_EQ(compressed_size, 0);
+    }
+
+
     TEST(CompressTest, CompressAndDecompress)
     {
         const std::string input(1024 * 1024, 'A');

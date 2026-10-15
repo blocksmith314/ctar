@@ -315,7 +315,7 @@ namespace ctar
             }
             bool skip_compression = ShouldSkipCompression(file_name_status.value());
 
-            const bool can_compress = !skip_compression && original_size <= kMaxCompressFileSize && original_size > 0;
+            const bool can_compress = !skip_compression && original_size <= kMaxInputSize && original_size > 0;
             block_meta.file_hashes[i] = XXH64(tls_read_buf.data(), original_size, kHashSeed);
             if (can_compress)
             {

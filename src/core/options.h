@@ -35,7 +35,7 @@ namespace ctar
 
     constexpr int kLZ4HCMax = 12;
 
-    constexpr uint32_t kMaxCompressFileSize = 0x7E000000;
+    constexpr uint32_t kMaxInputSize = 0x7E000000;
 
     constexpr size_t kMaxFileCountPerBlock = 128;
 
