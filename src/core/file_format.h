@@ -91,18 +91,17 @@ namespace ctar
 
         static_assert(kListColumnSize == kListColumnNames.size(), "LIST column count mismatch, update kListColumnSize");
 
-
     } // namespace list
 
     namespace fs = std::filesystem;
-    constexpr std::string_view blue_start = "\033[34m";
-    constexpr std::string_view color_reset = "\033[0m";
+    constexpr std::string_view kBlueStart = "\033[34m";
+    constexpr std::string_view kColorReset = "\033[0m";
 
     using entry_id_t = uint64_t;
     constexpr entry_id_t kRootDirId = 1;
     constexpr entry_id_t kFileBeginId = 1;
 
-    constexpr std::vector<entry_id_t> empty_vec;
+    constexpr std::vector<entry_id_t> kEmptyVec;
 
     enum class OutputMode : uint8_t
     {
@@ -185,7 +184,7 @@ namespace ctar
 
     struct PackFileHeader
     {
-        uint32_t magic_number = MagicNumber;
+        uint32_t magic_number = kMagicNumber;
         Version file_format_version = kFileFormatVersion;
         uint64_t file_meta_size = 0;
         PackFileHeader() = default;

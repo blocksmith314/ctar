@@ -64,7 +64,7 @@ namespace ctar
     {
         magic_number = DecodeFixed32(ptr);
         ptr += sizeof(uint32_t);
-        if (magic_number != MagicNumber)
+        if (magic_number != kMagicNumber)
         {
             return error_corruption("Invalid magic number");
         }
@@ -418,19 +418,19 @@ namespace ctar
     const std::vector<entry_id_t>& PackFileHandle::GetChildDirIdsByDirId(entry_id_t parent_dir_id) const
     {
         const auto it = pack_file_meta_.dir_id_to_child_dir_ids.find(parent_dir_id);
-        return (it != pack_file_meta_.dir_id_to_child_dir_ids.end()) ? it->second : empty_vec;
+        return (it != pack_file_meta_.dir_id_to_child_dir_ids.end()) ? it->second : kEmptyVec;
     }
 
     const std::vector<entry_id_t>& PackFileHandle::GetChildFileIdsByDirId(entry_id_t parent_dir_id) const
     {
         const auto it = pack_file_meta_.dir_id_to_child_file_ids.find(parent_dir_id);
-        return (it != pack_file_meta_.dir_id_to_child_file_ids.end()) ? it->second : empty_vec;
+        return (it != pack_file_meta_.dir_id_to_child_file_ids.end()) ? it->second : kEmptyVec;
     }
 
     const std::vector<uint64_t>& PackFileHandle::GetFileSizeByDirId(entry_id_t parent_dir_id) const
     {
         const auto it = pack_file_meta_.dir_id_to_child_file_sizes.find(parent_dir_id);
-        return (it != pack_file_meta_.dir_id_to_child_file_sizes.end()) ? it->second : empty_vec;
+        return (it != pack_file_meta_.dir_id_to_child_file_sizes.end()) ? it->second : kEmptyVec;
     }
 
     void PackFileHandle::SetFileEntryMeta(const entry_id_t file_id, uint64_t block_id, const uint64_t offset,
@@ -588,7 +588,7 @@ namespace ctar
         {
             if (output_mode == OutputMode::TREE)
             {
-                out << blue_start << dir_name << color_reset << '\n';
+                out << kBlueStart << dir_name << kColorReset << '\n';
             }
             else if (output_mode == OutputMode::TSV)
             {
@@ -635,9 +635,9 @@ namespace ctar
                 out << prefix << (is_last ? "└── " : "├── ");
                 if (entry.is_directory)
                 {
-                    out << blue_start;
+                    out << kBlueStart;
                 }
-                out << entry.name << color_reset << '\n';
+                out << entry.name << kColorReset << '\n';
                 if (entry.is_directory)
                 {
                     std::string new_prefix = prefix + (is_last ? "    " : "│   ");

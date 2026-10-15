@@ -8,7 +8,7 @@ namespace ctar
 {
 
     // ascii(hexadecimal) of ctar 0x43544152
-    static constexpr uint32_t MagicNumber = 0x52415443;
+    static constexpr uint32_t kMagicNumber = 0x52415443;
 
     namespace unit
     {

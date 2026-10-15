@@ -635,10 +635,10 @@ namespace ctar
             block_region_size_ = max_block_region_size_;
         }
         std::string magic_number;
-        magic_number.reserve(sizeof(MagicNumber));
-        PutFixed32(&magic_number, MagicNumber);
+        magic_number.reserve(sizeof(kMagicNumber));
+        PutFixed32(&magic_number, kMagicNumber);
         status =
-            write_file->RandomWrite(meta_region_size_ + block_region_size_, sizeof(MagicNumber), magic_number.data());
+            write_file->RandomWrite(meta_region_size_ + block_region_size_, sizeof(kMagicNumber), magic_number.data());
         if (!status)
         {
             fs::remove(output_pack_file);

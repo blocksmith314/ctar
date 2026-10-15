@@ -26,7 +26,7 @@ namespace ctar
         }
         auto& read_file = read_file_status.value();
 
-        constexpr size_t magic_len = sizeof(MagicNumber);
+        constexpr size_t magic_len = sizeof(kMagicNumber);
 
         // read head magic: offset 0
         std::string buf;
@@ -42,9 +42,9 @@ namespace ctar
                                                << ", actual=" << read_status.value() << ", file=" << pack_file;
         }
         uint32_t head_magic = DecodeFixed32(buf.data());
-        if (head_magic != MagicNumber)
+        if (head_magic != kMagicNumber)
         {
-            return testing::AssertionFailure() << "Head magic mismatch! expected=0x" << std::hex << MagicNumber
+            return testing::AssertionFailure() << "Head magic mismatch! expected=0x" << std::hex << kMagicNumber
                                                << ", actual=0x" << std::hex << head_magic << ", file=" << pack_file;
         }
 
@@ -76,10 +76,10 @@ namespace ctar
                 << "Tail magic short‑read. expected=" << magic_len << ", actual=" << read_status.value()
                 << ", offset=" << tail_magic_offset << ", file=" << pack_file;
         }
-        if (uint32_t tail_magic = DecodeFixed32(buf.data()); tail_magic != MagicNumber)
+        if (uint32_t tail_magic = DecodeFixed32(buf.data()); tail_magic != kMagicNumber)
         {
             return testing::AssertionFailure()
-                << "Tail magic mismatch! expected=0x" << std::hex << MagicNumber << ", actual=0x" << std::hex
+                << "Tail magic mismatch! expected=0x" << std::hex << kMagicNumber << ", actual=0x" << std::hex
                 << tail_magic << ", offset=" << tail_magic_offset << ", file=" << pack_file;
         }
 
