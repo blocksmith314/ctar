@@ -158,11 +158,11 @@ namespace ctar
     }
 
 
-    TEST(FileBlobMetaTest, SerializeDeserializeWithData)
+    TEST(PackFileMetaTest, SerializeDeserializeWithData)
     {
-        PackFileMeta src;
+        PackFileMeta pack_file_meta;
 
-        src.dir_name_data = "/test/dir_name";
+        pack_file_meta.dir_name_data = "/test/dir_name";
         entry_id_t dir_id = 1;
         std::string file1 = "hello.txt";
         entry_id_t file1_id = 1;
@@ -172,33 +172,33 @@ namespace ctar
         entry_id_t file2_id = 2;
         uint64_t file2_size = 8192;
 
-        src.file_name_data = file1 + file2;
+        pack_file_meta.file_name_data = file1 + file2;
 
         EntryRecord dir_entry1{};
         dir_entry1.name_handle.offset = 0;
-        dir_entry1.name_handle.len = src.dir_name_data.size();
-        src.dir_entry_records.put(1, dir_entry1);
+        dir_entry1.name_handle.len = pack_file_meta.dir_name_data.size();
+        pack_file_meta.dir_entry_records.put(1, dir_entry1);
 
         EntryRecord file_entry1{};
         file_entry1.name_handle.offset = 0;
         file_entry1.name_handle.len = file1.size();
-        src.file_entry_records.put(file1_id, file_entry1);
+        pack_file_meta.file_entry_records.put(file1_id, file_entry1);
 
         EntryRecord file_entry2{};
         file_entry2.name_handle.offset = file1.size();
         file_entry2.name_handle.len = file2.size();
-        src.file_entry_records.put(file2_id, file_entry2);
+        pack_file_meta.file_entry_records.put(file2_id, file_entry2);
 
-        src.dir_id_to_child_dir_ids.put(dir_id, std::vector<entry_id_t>{});
+        pack_file_meta.dir_id_to_child_dir_ids.put(dir_id, std::vector<entry_id_t>{});
 
-        src.dir_id_to_child_file_ids.put(dir_id, std::vector<entry_id_t>{file1_id, file2_id});
-        src.dir_id_to_child_file_sizes.put(dir_id, std::vector<uint64_t>{file1_size, file2_size});
+        pack_file_meta.dir_id_to_child_file_ids.put(dir_id, std::vector<entry_id_t>{file1_id, file2_id});
+        pack_file_meta.dir_id_to_child_file_sizes.put(dir_id, std::vector<uint64_t>{file1_size, file2_size});
 
         // Serialize
         std::string buffer;
-        src.Serialize(&buffer);
+        pack_file_meta.Serialize(&buffer);
         const size_t write_len = buffer.size();
-        const size_t calc_len = src.SerializedSize();
+        const size_t calc_len = pack_file_meta.SerializedSize();
         EXPECT_EQ(write_len, calc_len) << "SerializedSize () != actual serialized byte count, size mismatch";
 
         // Deserialize
@@ -209,32 +209,32 @@ namespace ctar
         EXPECT_EQ(write_len, consumed_bytes) << "Pointer drift detected, deserialization consumed wrong bytes";
 
         // data check
-        EXPECT_EQ(dst.dir_name_data, src.dir_name_data);
-        EXPECT_EQ(dst.file_name_data, src.file_name_data);
-        EXPECT_EQ(dst.dir_entry_records.size(), src.dir_entry_records.size());
-        EXPECT_EQ(dst.file_entry_records.size(), src.file_entry_records.size());
-        auto src_subdir = src.dir_id_to_child_dir_ids.find(1)->second;
+        EXPECT_EQ(dst.dir_name_data, pack_file_meta.dir_name_data);
+        EXPECT_EQ(dst.file_name_data, pack_file_meta.file_name_data);
+        EXPECT_EQ(dst.dir_entry_records.size(), pack_file_meta.dir_entry_records.size());
+        EXPECT_EQ(dst.file_entry_records.size(), pack_file_meta.file_entry_records.size());
+        auto src_subdir = pack_file_meta.dir_id_to_child_dir_ids.find(1)->second;
         auto dst_subdir = dst.dir_id_to_child_dir_ids.find(1)->second;
         EXPECT_EQ(dst_subdir, src_subdir);
-        auto src_subfile = src.dir_id_to_child_file_ids.find(1)->second;
+        auto src_subfile = pack_file_meta.dir_id_to_child_file_ids.find(1)->second;
         auto dst_subfile = dst.dir_id_to_child_file_ids.find(1)->second;
         EXPECT_EQ(dst_subfile, src_subfile);
-        auto src_sizes = src.dir_id_to_child_file_sizes.find(1)->second;
+        auto src_sizes = pack_file_meta.dir_id_to_child_file_sizes.find(1)->second;
         auto dst_sizes = dst.dir_id_to_child_file_sizes.find(1)->second;
         EXPECT_EQ(dst_sizes, src_sizes);
     }
 
 
-    TEST(FileBlobMetaTest, SerializeDeserializeEmptyContainers)
+    TEST(PackFileMetaTest, SerializeDeserializeEmptyContainers)
     {
-        PackFileMeta src;
-        src.dir_name_data.clear();
-        src.file_name_data.clear();
+        PackFileMeta pack_file_meta;
+        pack_file_meta.dir_name_data.clear();
+        pack_file_meta.file_name_data.clear();
 
         std::string buffer;
-        src.Serialize(&buffer);
+        pack_file_meta.Serialize(&buffer);
         const size_t write_len = buffer.size();
-        const size_t calc_len = src.SerializedSize();
+        const size_t calc_len = pack_file_meta.SerializedSize();
         EXPECT_EQ(write_len, calc_len);
         PackFileMeta dst;
         const char* ptr = buffer.data();
@@ -251,21 +251,22 @@ namespace ctar
     }
 
 
-    void AssertEntryName(const auto& map, const std::string& name_data, entry_id_t id, std::string_view expect,
-                         std::string_view type)
+    // Retrieve entry_name using entry_id and validate against expect_entry_name.
+    void AssertEntryName(const auto& entry_map, const std::string& name_data, entry_id_t entry_id, std::string_view expect_entry_name,
+                         std::string_view entry_type)
     {
-        auto it = map.find(id);
-        if (it == map.end())
+        auto it = entry_map.find(entry_id);
+        if (it == entry_map.end())
         {
-            FAIL() << "not found target " << type << " id: " << id;
+            FAIL() << "not found target " << entry_type << " entry_id: " << entry_id;
         }
         const auto& h = it->second.name_handle;
-        ASSERT_EQ(name_data.substr(h.offset, h.len), expect);
+        ASSERT_EQ(name_data.substr(h.offset, h.len), expect_entry_name);
     }
 
-    TEST(FileBlobMetaTest, SerializeDeserializeMultipleParentEntries)
+    TEST(PackFileMetaTest, SerializeDeserializeMultipleParentEntries)
     {
-        PackFileMeta src;
+        PackFileMeta pack_file_meta;
         std::string dir1 = "dir1";
         entry_id_t dir1_id = 1;
         std::string file1 = "file1_1";
@@ -285,56 +286,71 @@ namespace ctar
         entry_id_t file4_id = 4;
         uint64_t file4_size = 400;
 
-        auto dir_file_meta = EntryMeta{EntryType::DIRECTORY, 0644, 0, "root", "staff", 3600000, 0, 0,0};
-        auto dir1_entry = EntryRecord{{0, dir1.size()}, dir_file_meta};
-        auto dir2_entry = EntryRecord{{dir1.size(), dir2.size()}, dir_file_meta};
+        auto dir_meta = EntryMeta{EntryType::DIRECTORY, 0644, 0, "root", "staff", 3600000, 0, 0, 0};
+        auto dir1_entry = EntryRecord{{0, dir1.size()}, dir_meta};
+        auto dir2_entry = EntryRecord{{dir1.size(), dir2.size()}, dir_meta};
 
-        auto file1_file_meta = EntryMeta{EntryType::REGULAR, 0644, 0, "root", "staff", 3600000, 0, file1_size,file1_size};
-        auto file1_entry = EntryRecord{{0, file1.size()}, file1_file_meta};
+        auto file1_meta = EntryMeta{EntryType::REGULAR, 0644, 0, "root", "staff", 3600000, 0, file1_size, file1_size};
+        auto file1_entry = EntryRecord{{0, file1.size()}, file1_meta};
 
-        auto file2_file_meta = EntryMeta{EntryType::REGULAR, 0644, 0, "root", "staff", 3600000, file1_size, file2_size,file2_size};
-        auto file2_entry = EntryRecord{{file1.size(), file2.size()}, file2_file_meta};
+        auto file2_meta =
+            EntryMeta{EntryType::REGULAR, 0644, 0, "root", "staff", 3600000, file1_size, file2_size, file2_size};
+        auto file2_entry = EntryRecord{{file1.size(), file2.size()}, file2_meta};
 
-        auto file3_file_meta =
-            EntryMeta{EntryType::REGULAR, 0644, 0, "root", "staff", 3600000, file1_size + file2_size, file3_size,file3_size};
-        auto file3_entry = EntryRecord{{file1.size() + file2.size(), file3.size()}, file3_file_meta};
+        auto file3_meta = EntryMeta{EntryType::REGULAR,      0644,       0,         "root", "staff", 3600000,
+                                    file1_size + file2_size, file3_size, file3_size};
+        auto file3_entry = EntryRecord{{file1.size() + file2.size(), file3.size()}, file3_meta};
 
-        auto file4_file_meta = EntryMeta{
-            EntryType::REGULAR, 0644, 0, "root", "staff", 3600000, file1_size + file2_size + file3_size, file4_size,file4_size};
-        auto file4_entry = EntryRecord{{file1.size() + file2.size() + file3.size(), file4.size()}, file4_file_meta};
+        auto file4_meta =
+            EntryMeta{EntryType::REGULAR, 0644,      0, "root", "staff", 3600000, file1_size + file2_size + file3_size,
+                      file4_size,         file4_size};
+        auto file4_entry = EntryRecord{{file1.size() + file2.size() + file3.size(), file4.size()}, file4_meta};
 
         ASSERT_EQ(PermBitsToString(file1_entry.entry_meta.permissions), "rw-r--r--");
         ASSERT_EQ(FormatTime(file1_entry.entry_meta.modify_time / 1000), "Jan 01  1970");
 
-        src.dir_name_data = dir1 + dir2;
-        src.file_name_data = file1 + file2 + file3 + file4;
+        pack_file_meta.dir_name_data = dir1 + dir2;
+        pack_file_meta.file_name_data = file1 + file2 + file3 + file4;
 
-        src.dir_entry_records.put(dir1_id, dir1_entry);
-        src.dir_entry_records.put(dir2_id, dir2_entry);
+        pack_file_meta.dir_entry_records.put(dir1_id, dir1_entry);
+        pack_file_meta.dir_entry_records.put(dir2_id, dir2_entry);
 
-        src.file_entry_records.put(file1_id, file1_entry);
-        src.file_entry_records.put(file2_id, file2_entry);
-        src.file_entry_records.put(file3_id, file3_entry);
-        src.file_entry_records.put(file4_id, file4_entry);
+        pack_file_meta.file_entry_records.put(file1_id, file1_entry);
+        pack_file_meta.file_entry_records.put(file2_id, file2_entry);
+        pack_file_meta.file_entry_records.put(file3_id, file3_entry);
+        pack_file_meta.file_entry_records.put(file4_id, file4_entry);
 
-        src.dir_id_to_child_dir_ids.put(dir1_id, {dir2_id});
-        src.dir_id_to_child_dir_ids.put(dir2_id, {});
-        src.dir_id_to_child_file_ids.put(dir1_id, {file1_id, file2_id});
-        src.dir_id_to_child_file_sizes.put(dir2_id, {file3_id, file4_id});
+        // Establish the relationship between a directory and its subdirectories
+        pack_file_meta.dir_id_to_child_dir_ids.put(dir1_id, {dir2_id});
+        pack_file_meta.dir_id_to_child_dir_ids.put(dir2_id, {});
+        // Establish the relationship between a directory and its child files
+        pack_file_meta.dir_id_to_child_file_ids.put(dir1_id, {file1_id, file2_id});
+        pack_file_meta.dir_id_to_child_file_ids.put(dir2_id, {file3_id, file4_id});
+        // Establish the relationship between a directory and the size of each of its child files.
+        pack_file_meta.dir_id_to_child_file_sizes.put(dir1_id, {file1_size, file2_size});
+        pack_file_meta.dir_id_to_child_file_sizes.put(dir2_id, {file3_size, file4_size});
 
         std::string buf;
-        src.Serialize(&buf);
+        pack_file_meta.Serialize(&buf);
         const size_t write_len = buf.size();
-        const size_t calc_len = src.SerializedSize();
+        const size_t calc_len = pack_file_meta.SerializedSize();
         EXPECT_EQ(write_len, calc_len);
         PackFileMeta dst;
         const char* p = buf.data();
         dst.Deserialize(p);
         EXPECT_EQ(write_len, static_cast<size_t>(p - buf.data()));
+
+        // check subdirectories
         ASSERT_THAT(dst.dir_id_to_child_dir_ids.find(dir1_id)->second, ElementsAre(dir2_id));
         EXPECT_EQ(dst.dir_id_to_child_dir_ids.find(dir2_id)->second.size(), 0);
+
+        // check child files
         ASSERT_THAT(dst.dir_id_to_child_file_ids.find(dir1_id)->second, ElementsAre(file1_id, file2_id));
-        ASSERT_THAT(dst.dir_id_to_child_file_sizes.find(dir2_id)->second, ElementsAre(file3_id, file4_id));
+        ASSERT_THAT(dst.dir_id_to_child_file_ids.find(dir2_id)->second, ElementsAre(file3_id, file4_id));
+
+        // check the size of child files
+        ASSERT_THAT(dst.dir_id_to_child_file_sizes.find(dir1_id)->second, ElementsAre(file1_size, file2_size));
+        ASSERT_THAT(dst.dir_id_to_child_file_sizes.find(dir2_id)->second, ElementsAre(file3_size, file4_size));
 
         AssertEntryName(dst.dir_entry_records, dst.dir_name_data, dir1_id, dir1, "dir");
         AssertEntryName(dst.dir_entry_records, dst.dir_name_data, dir2_id, dir2, "dir");
@@ -346,20 +362,20 @@ namespace ctar
     }
 
 
-    TEST(FileBlobMetaTest, ClearResetAllData)
+    TEST(PackFileMetaTest, ClearResetAllData)
     {
-        PackFileMeta meta;
-        meta.dir_name_data = "/test/folder";
-        meta.dir_entry_records.put(1, EntryRecord{});
-        meta.dir_id_to_child_dir_ids.put(1, {2, 3});
-        meta.Clear();
-        EXPECT_TRUE(meta.dir_name_data.empty());
-        EXPECT_TRUE(meta.file_name_data.empty());
-        EXPECT_TRUE(meta.dir_entry_records.empty());
-        EXPECT_TRUE(meta.file_entry_records.empty());
-        EXPECT_TRUE(meta.dir_id_to_child_dir_ids.empty());
-        EXPECT_TRUE(meta.dir_id_to_child_file_ids.empty());
-        EXPECT_TRUE(meta.dir_id_to_child_file_sizes.empty());
+        PackFileMeta pack_file_meta;
+        pack_file_meta.dir_name_data = "/test/folder";
+        pack_file_meta.dir_entry_records.put(1, EntryRecord{});
+        pack_file_meta.dir_id_to_child_dir_ids.put(1, {2, 3});
+        pack_file_meta.Clear();
+        EXPECT_TRUE(pack_file_meta.dir_name_data.empty());
+        EXPECT_TRUE(pack_file_meta.file_name_data.empty());
+        EXPECT_TRUE(pack_file_meta.dir_entry_records.empty());
+        EXPECT_TRUE(pack_file_meta.file_entry_records.empty());
+        EXPECT_TRUE(pack_file_meta.dir_id_to_child_dir_ids.empty());
+        EXPECT_TRUE(pack_file_meta.dir_id_to_child_file_ids.empty());
+        EXPECT_TRUE(pack_file_meta.dir_id_to_child_file_sizes.empty());
     }
 
 
@@ -487,7 +503,7 @@ namespace ctar
             auto file_size = std::stoll(std::string(row[8]));
             auto dir_path = std::string(row[tsv::kTsvColumnSize - 2]);
             auto file_name = std::string(row[tsv::kTsvColumnSize - 1]);
-            auto file_path = std::format("{}/{}",dir_path,file_name);
+            auto file_path = std::format("{}/{}", dir_path, file_name);
 
             ASSERT_EQ(fs::file_size(file_path), file_size);
 
