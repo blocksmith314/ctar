@@ -177,6 +177,7 @@ if (BUILD_TEST)
             test/cases/test_sorted_map.cpp
             test/cases/test_status.cpp
             test/cases/test_thread_pool.cpp
+            test/cases/test_version.cpp
             test/cases/test_xxhash.cpp
     )
 

@@ -9,20 +9,6 @@ namespace ctar
 {
     using ::testing::ElementsAre;
 
-
-    TEST(Version, SerializeDeserialize)
-    {
-        constexpr uint8_t major = 1;
-        constexpr uint8_t minor = 2;
-        constexpr uint8_t patch = 3;
-        constexpr Version version(major, minor, patch);
-        constexpr uint32_t version_number = version.Encode();
-        constexpr Version deser_version = Version::Decode(version_number);
-        ASSERT_EQ(deser_version.major, major);
-        ASSERT_EQ(deser_version.minor, minor);
-        ASSERT_EQ(deser_version.patch, patch);
-    }
-
     TEST(PackFileHeader, SerializeDeserialize)
     {
         uint64_t file_meta_size = 4096;
