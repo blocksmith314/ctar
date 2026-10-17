@@ -1,7 +1,9 @@
 #ifndef CTAR_SERIALIZE_HELPER_H
 #define CTAR_SERIALIZE_HELPER_H
+#include <algorithm>
+#include <array>
 #include <filesystem>
-#include <unordered_set>
+#include <string_view>
 namespace ctar
 {
 
@@ -14,7 +16,9 @@ namespace ctar
         return (r == 0) ? q * BLOCK : (q + 1) * BLOCK;
     }
 
-    static const std::unordered_set<std::string> junk_files = {".DS_Store", "._.DS_Store"};
+    /// File names that are never packed. Kept as string views so a directory scan
+    /// can compare them without building an fs::path or a std::string per entry.
+    inline constexpr std::array<std::string_view, 2> junk_files = {".DS_Store", "._.DS_Store"};
 
     constexpr size_t FIX64_LEN = sizeof(uint64_t);
 
@@ -58,7 +62,13 @@ namespace ctar
 
     [[nodiscard]] inline bool is_skip_entry(const fs::directory_entry& entry) noexcept
     {
-        return junk_files.contains(entry.path().filename());
+        // Compare the last path component in place: entry.path() is a reference and
+        // native() is its own string, so this builds no temporary path or string.
+        // native() returns std::string on POSIX, which is the only target here.
+        const std::string& native = entry.path().native();
+        const size_t sep = native.find_last_of('/');
+        const std::string_view name = std::string_view(native).substr(sep == std::string::npos ? 0 : sep + 1);
+        return std::ranges::find(junk_files, name) != junk_files.end();
     }
 
     /// @brief Convert unix permission mode bits to 9‑character rwx string

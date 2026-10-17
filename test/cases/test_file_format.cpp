@@ -1,6 +1,8 @@
+#include <fstream>
 #include <grp.h>
 #include <gtest/gtest.h>
 #include <pwd.h>
+#include <sys/stat.h>
 #include "gmock/gmock-matchers.h"
 #include "src/core/file_format.h"
 #include "test/tools/fixture/blob_store_fixture.h"
@@ -514,6 +516,27 @@ namespace ctar
             std::snprintf(group_name, std::size(group_name), "%s", gr->gr_name);
             EXPECT_EQ(std::string(group_name), file_group_name);
         }
+    }
+
+    /// Special files must be skipped, not treated as directories: scanning used to
+    /// recurse into a FIFO and abort on the resulting filesystem_error.
+    TEST(PackFileHandleScan, SkipsFifo)
+    {
+        const fs::path dir = "special_file_scan_dir";
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        {
+            std::ofstream ofs(dir / "a.txt");
+            ofs << "hello";
+        }
+        ASSERT_EQ(::mkfifo((dir / "pipe").c_str(), 0644), 0);
+
+        PackFileHandle handle;
+        const Status status = handle.ScanDirectory(dir);
+        ASSERT_TRUE(status) << status.error().message();
+        EXPECT_EQ(handle.TotalFileCnt(), 1U);
+
+        fs::remove_all(dir);
     }
 
 

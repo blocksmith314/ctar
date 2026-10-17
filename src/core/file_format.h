@@ -391,8 +391,10 @@ namespace ctar
 
         /// @brief Process filesystem directory entry, extract metadata from OS
         /// @param entry filesystem directory entry from std::filesystem
+        /// @param entry_type kind decided by the caller, so the sort order and the
+        ///        recorded metadata cannot disagree
         /// @return EntryMeta on success, ErrorStatus on failure(permission denied, stat failed etc.)
-        std::expected<EntryMeta, ErrorStatus> ProcessDirEntry(const fs::directory_entry& entry);
+        std::expected<EntryMeta, ErrorStatus> ProcessDirEntry(const fs::directory_entry& entry, EntryType entry_type);
 
         /// @brief Render directory entries into specified format and write to output stream
         /// @param out output stream for TREE / LIST / TSV output

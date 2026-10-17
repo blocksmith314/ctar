@@ -1,9 +1,11 @@
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <grp.h>
 #include <pwd.h>
 #include <ranges>
 #include <sys/stat.h>
+#include <system_error>
 
 #include "file_format.h"
 #include "src/utils/logger.h"
@@ -465,17 +467,64 @@ namespace ctar
 
     [[nodiscard]] size_t PackFileHandle::PackFileMetaSerializedSize() const { return pack_file_meta_.SerializedSize(); }
 
-    std::expected<EntryMeta, ErrorStatus> PackFileHandle::ProcessDirEntry(const fs::directory_entry& entry)
+    namespace
+    {
+        /// Kind of a directory entry, decided once per entry so that sorting, the
+        /// recursion and ProcessDirEntry all agree on it.
+        enum class ScanKind : uint8_t
+        {
+            kSkip,
+            kRegular,
+            kDirectory,
+        };
+
+        /// Classify an entry without following symlinks and without throwing.
+        /// Anything that is neither a regular file nor a directory -- symlink, FIFO,
+        /// unix socket, device node, or an entry whose status cannot be read -- is
+        /// skipped instead of being treated as a directory.
+        ScanKind ClassifyEntry(const fs::directory_entry& entry) noexcept
+        {
+            std::error_code ec;
+            if (entry.is_symlink(ec))
+            {
+                return ScanKind::kSkip;
+            }
+            if (entry.is_regular_file(ec))
+            {
+                return ScanKind::kRegular;
+            }
+            if (entry.is_directory(ec))
+            {
+                return ScanKind::kDirectory;
+            }
+            return ScanKind::kSkip;
+        }
+    } // namespace
+
+    std::expected<EntryMeta, ErrorStatus> PackFileHandle::ProcessDirEntry(const fs::directory_entry& entry,
+                                                                          const EntryType entry_type)
     {
         EntryMeta file_meta{};
-        file_meta.entry_type = entry.is_regular_file() ? EntryType::REGULAR : EntryType::DIRECTORY;
-        file_meta.file_orig_size = entry.is_regular_file() ? fs::file_size(entry.path()) : 0;
-        pack_file_meta_.total_original_size += file_meta.file_orig_size;
-        if (entry.is_regular_file())
+        file_meta.entry_type = entry_type;
+
+        std::error_code ec;
+        if (entry_type == EntryType::REGULAR)
         {
+            const uint64_t file_size = fs::file_size(entry.path(), ec);
+            if (ec)
+            {
+                return error_io("fail to get the size of {}: {}", entry.path().c_str(), ec.message());
+            }
+            file_meta.file_orig_size = file_size;
+            pack_file_meta_.total_original_size += file_size;
             pack_file_meta_.total_file_count += 1;
         }
-        const auto ftime = fs::last_write_time(entry.path());
+
+        const auto ftime = fs::last_write_time(entry.path(), ec);
+        if (ec)
+        {
+            return error_io("fail to get the modification time of {}: {}", entry.path().c_str(), ec.message());
+        }
         const auto sys_tp = std::chrono::file_clock::to_sys(ftime);
         file_meta.modify_time =
             std::chrono::duration_cast<std::chrono::milliseconds>(sys_tp.time_since_epoch()).count();
@@ -509,66 +558,101 @@ namespace ctar
         return file_meta;
     }
 
-    Status PackFileHandle::ScanDirectory(const std::string& root_path, bool recursive, bool filter_junk)
+    Status PackFileHandle::ScanDirectory(const std::string& root_path, const bool recursive, const bool filter_junk)
     {
-        fs::path root(root_path);
-        if (!fs::exists(root))
+        const fs::path root(root_path);
+
+        std::error_code ec;
+        if (!fs::is_directory(root, ec))
         {
-            return error_io("directory '{}' is not exists", root_path);
+            return error_io("'{}' is not a readable directory: {}", root_path,
+                            ec ? ec.message() : std::string("not a directory"));
         }
+
+        // Open the iterator before touching any metadata, so a bad root cannot leave a
+        // half-built entry behind.
+        fs::directory_iterator it(root, ec);
+        if (ec)
+        {
+            return error_io("fail to open directory '{}': {}", root_path, ec.message());
+        }
+
+        struct ScanEntry
+        {
+            fs::directory_entry entry;
+            EntryType type;
+            std::string name;
+        };
+
         AddDir(dir_id_, root_path);
         dir_id_++;
-        std::vector<fs::directory_entry> entries;
-        for (const auto& e : fs::directory_iterator(root))
+
+        std::vector<ScanEntry> entries;
+        const fs::directory_iterator end;
+        while (it != end)
         {
-            // skip junk file and symlink
-            if ((filter_junk && is_skip_entry(e)) || fs::is_symlink(e))
+            const fs::directory_entry& e = *it;
+            const ScanKind kind = (filter_junk && is_skip_entry(e)) ? ScanKind::kSkip : ClassifyEntry(e);
+            if (kind != ScanKind::kSkip)
             {
-                continue;
+                entries.push_back({e,
+                                   kind == ScanKind::kDirectory ? EntryType::DIRECTORY : EntryType::REGULAR,
+                                   e.path().filename().string()});
             }
-            entries.push_back(e);
+            it.increment(ec);
+            if (ec)
+            {
+                return error_io("fail to enumerate directory '{}': {}", root_path, ec.message());
+            }
         }
+
+        // Directories first, then by name. Both keys are computed once per entry; the
+        // previous comparator rebuilt two fs::path objects on every comparison.
         std::ranges::sort(entries,
-                          [](const fs::directory_entry& a, const fs::directory_entry& b)
+                          [](const ScanEntry& a, const ScanEntry& b)
                           {
-                              const bool a_dir = a.is_directory();
-                              if (const bool b_dir = b.is_directory(); a_dir != b_dir)
+                              const bool a_dir = a.type == EntryType::DIRECTORY;
+                              const bool b_dir = b.type == EntryType::DIRECTORY;
+                              if (a_dir != b_dir)
+                              {
                                   return a_dir;
-                              return a.path().filename() < b.path().filename();
+                              }
+                              return a.name < b.name;
                           });
-        for (const auto& e : entries)
+
+        for (const auto& s : entries)
         {
-            auto result = ProcessDirEntry(e);
-            std::string entry_path = e.path().string();
+            // A reference into the entry's own path: the entries vector outlives this
+            // loop, so no copy (and no view of a temporary) is needed here.
+            const std::string& entry_path = s.entry.path().native();
+            auto result = ProcessDirEntry(s.entry, s.type);
             if (!result)
             {
                 return std::unexpected(result.error());
             }
             const EntryMeta& meta = result.value();
-            if (auto get_status = GetParentDirIdByPath(entry_path))
+
+            auto get_status = GetParentDirIdByPath(entry_path);
+            if (!get_status)
             {
-                entry_id_t parent_dir_id = get_status.value();
-                if (meta.entry_type == EntryType::DIRECTORY)
+                return std::unexpected(get_status.error());
+            }
+            const entry_id_t parent_dir_id = get_status.value();
+            if (s.type == EntryType::DIRECTORY)
+            {
+                AddDir(dir_id_, entry_path, parent_dir_id, meta);
+                if (recursive)
                 {
-                    AddDir(dir_id_, entry_path, parent_dir_id, meta);
-                    if (recursive)
+                    if (auto scan_status = ScanDirectory(entry_path, true, filter_junk); !scan_status)
                     {
-                        if (auto scan_status = ScanDirectory(entry_path, true, filter_junk); !scan_status)
-                        {
-                            return scan_status;
-                        }
+                        return scan_status;
                     }
-                }
-                else
-                {
-                    const std::string file_name = e.path().filename().string();
-                    AddFile(file_id_, file_name, parent_dir_id, meta);
-                    file_id_++;
                 }
             }
             else
             {
-                return std::unexpected(get_status.error());
+                AddFile(file_id_, s.name, parent_dir_id, meta);
+                file_id_++;
             }
         }
         return {};
