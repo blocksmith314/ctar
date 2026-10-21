@@ -541,7 +541,7 @@ namespace ctar
         else
         {
             std::snprintf(file_meta.owner_name, std::size(file_meta.owner_name), "%s", "unknown");
-            std::println(std::cout, "failed to get uid of file {}, will use unknown instead", entry.path().c_str());
+            std::println(std::cerr, "failed to get uid of file {}, will use unknown instead", entry.path().c_str());
         }
         if (const group* gr = getgrgid(file_stat.st_gid); gr != nullptr)
         {
@@ -550,7 +550,7 @@ namespace ctar
         else
         {
             std::snprintf(file_meta.group_name, std::size(file_meta.group_name), "%s", "unknown");
-            std::println(std::cout, "failed to get group_name of file {}, will use unknown instead",
+            std::println(std::cerr, "failed to get group_name of file {}, will use unknown instead",
                          entry.path().c_str());
         }
         file_meta.block_id = 0;
