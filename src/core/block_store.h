@@ -6,10 +6,12 @@
 #include <cstdint>
 #include <deque>
 #include <expected>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "file_format.h"
@@ -30,6 +32,23 @@ namespace ctar
 
     ResultStatus<uint64_t> Hash(const std::string& file_path);
     ResultStatus<uint64_t> Hash(const void* data, size_t len);
+
+    /// @brief Resolve a directory path recorded in an archive under @p root.
+    /// The archive is untrusted: a leading root is stripped, and an entry that would
+    /// end up outside @p root is rejected instead of being written there.
+    /// @param root output directory the entry has to stay inside
+    /// @param stored_dir directory path exactly as recorded in the archive
+    /// @return resolved path, or error_corruption when the entry escapes @p root
+    ResultStatus<fs::path> ResolveArchiveDirectory(const fs::path& root, const fs::path& stored_dir);
+
+    /// @brief Resolve a file entry recorded in an archive under @p root.
+    /// @param root output directory the entry has to stay inside
+    /// @param stored_dir directory path exactly as recorded in the archive
+    /// @param file_name file name exactly as recorded in the archive, must be a single
+    ///        path component (no separators, not "." or "..")
+    /// @return resolved path, or error_corruption when the entry escapes @p root
+    ResultStatus<fs::path> ResolveArchiveFile(const fs::path& root, const fs::path& stored_dir,
+                                              std::string_view file_name);
 
     class BlockStore
     {

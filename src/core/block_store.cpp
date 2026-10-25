@@ -49,6 +49,54 @@ namespace ctar
     }
 
 
+    namespace
+    {
+        /// Join an archive-stored path under @p root and reject anything that would
+        /// escape it. The archive is untrusted: its paths may be absolute or contain
+        /// "..", and neither may reach outside the output directory.
+        ResultStatus<fs::path> ResolveUnderRoot(const fs::path& root, const fs::path& stored)
+        {
+            // relative_path() drops a leading root, so an archive that recorded an
+            // absolute path still lands inside the output directory.
+            const fs::path relative = stored.relative_path().lexically_normal();
+            if (relative.empty())
+            {
+                return error_corruption("archive entry '{}' has an empty path", stored.string());
+            }
+            for (const fs::path& part : relative)
+            {
+                if (part == "..")
+                {
+                    return error_corruption("archive entry '{}' escapes the output directory", stored.string());
+                }
+            }
+            return (root / relative).lexically_normal();
+        }
+    } // namespace
+
+    ResultStatus<fs::path> ResolveArchiveDirectory(const fs::path& root, const fs::path& stored_dir)
+    {
+        return ResolveUnderRoot(root, stored_dir);
+    }
+
+    ResultStatus<fs::path> ResolveArchiveFile(const fs::path& root, const fs::path& stored_dir,
+                                              const std::string_view file_name)
+    {
+        const fs::path name(file_name);
+        // A file entry names exactly one component: a crafted archive could otherwise
+        // put separators or ".." here and place the file somewhere else.
+        if (name.empty() || name.has_parent_path() || name == "." || name == "..")
+        {
+            return error_corruption("archive entry has an invalid file name '{}'", file_name);
+        }
+        auto dir = ResolveUnderRoot(root, stored_dir);
+        if (!dir)
+        {
+            return std::unexpected(dir.error());
+        }
+        return dir.value() / name;
+    }
+
     Status BlockStore::Scan(const std::string& root_path, bool recursive)
     {
         return pack_file_handle_.ScanDirectory(root_path, recursive);
@@ -382,8 +430,10 @@ namespace ctar
         }
 
         size_t file_count = block_meta.file_ids.size();
-        fs::path output_dir =
-            fs::path(target_path_) / fs::path(std::string(block_meta.dir_stats.dir_path)).relative_path();
+        // The archive is untrusted: resolve every entry against the output directory
+        // and refuse anything that would land outside it.
+        const fs::path out_root(target_path_);
+        const fs::path archive_dir(std::string(block_meta.dir_stats.dir_path));
         std::string decompress_buffer;
         uint64_t hash_value;
         for (size_t i = 0; i < file_count; ++i)
@@ -395,7 +445,12 @@ namespace ctar
                 return error_not_found("failed to find file name in block_{}", block_meta.block_id);
             }
             const uint64_t file_offset = block_meta.file_offsets[i];
-            std::string output_file_name = output_dir / std::string(file_name_status.value());
+            auto output_path = ResolveArchiveFile(out_root, archive_dir, file_name_status.value());
+            if (!output_path)
+            {
+                return std::unexpected(output_path.error());
+            }
+            const std::string output_file_name = output_path.value().string();
             if (block_meta.file_orig_sizes[i] > 0)
             {
                 decompress_buffer.reserve(block_meta.file_orig_sizes[i]);
@@ -690,6 +745,7 @@ namespace ctar
 
     Status BlockStore::CreateUnpackDir() const
     {
+        const fs::path out_root(target_path_);
         for (const auto& dir_map : pack_file_handle_.GetDirEntryRecords())
         {
             auto dir_name_opt = pack_file_handle_.GetDirPathByDirId(dir_map.first);
@@ -697,11 +753,15 @@ namespace ctar
             {
                 return error_io("cannot find dir name of id {}", dir_map.first);
             }
-            fs::path sub_path = dir_name_opt.value();
-            auto full_path = fs::path(target_path_) / sub_path.relative_path();
-            if (auto success = fs::create_directories(full_path); !success && !fs::exists(full_path))
+            auto full_path = ResolveArchiveDirectory(out_root, fs::path(dir_name_opt.value()));
+            if (!full_path)
             {
-                return error_io("failed to create dir: {}", full_path.string());
+                return std::unexpected(full_path.error());
+            }
+            const fs::path& resolved = full_path.value();
+            if (auto success = fs::create_directories(resolved); !success && !fs::exists(resolved))
+            {
+                return error_io("failed to create dir: {}", resolved.string());
             }
         }
         return {};

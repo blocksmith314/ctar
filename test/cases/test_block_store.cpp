@@ -261,6 +261,47 @@ namespace ctar
             << "the dir is not match";
     }
 
+    TEST(ArchivePath, ResolvesEntriesInsideTheOutputDirectory)
+    {
+        const fs::path root = "/tmp/out";
+
+        auto inside = ResolveArchiveDirectory(root, "a/b");
+        ASSERT_TRUE(inside) << inside.error().message();
+        EXPECT_EQ(inside.value(), fs::path("/tmp/out/a/b"));
+
+        // An archive that recorded an absolute path still lands inside the output dir.
+        auto absolute = ResolveArchiveDirectory(root, "/data/tree");
+        ASSERT_TRUE(absolute) << absolute.error().message();
+        EXPECT_EQ(absolute.value(), fs::path("/tmp/out/data/tree"));
+
+        // ".." that resolves back inside the output directory is harmless.
+        auto back = ResolveArchiveDirectory(root, "a/../b");
+        ASSERT_TRUE(back) << back.error().message();
+        EXPECT_EQ(back.value(), fs::path("/tmp/out/b"));
+
+        auto file = ResolveArchiveFile(root, "a", "x.txt");
+        ASSERT_TRUE(file) << file.error().message();
+        EXPECT_EQ(file.value(), fs::path("/tmp/out/a/x.txt"));
+    }
+
+    TEST(ArchivePath, RejectsDirectoryTraversal)
+    {
+        const fs::path root = "/tmp/out";
+        EXPECT_FALSE(ResolveArchiveDirectory(root, "../etc"));
+        EXPECT_FALSE(ResolveArchiveDirectory(root, "a/../../etc"));
+        EXPECT_FALSE(ResolveArchiveDirectory(root, ""));
+    }
+
+    TEST(ArchivePath, RejectsFileNameTraversal)
+    {
+        const fs::path root = "/tmp/out";
+        EXPECT_FALSE(ResolveArchiveFile(root, "a", ".."));
+        EXPECT_FALSE(ResolveArchiveFile(root, "a", "../x"));
+        EXPECT_FALSE(ResolveArchiveFile(root, "a", "/etc/passwd"));
+        EXPECT_FALSE(ResolveArchiveFile(root, "a", "b/c"));
+        EXPECT_FALSE(ResolveArchiveFile(root, "a", ""));
+    }
+
 
 } // namespace ctar
 
