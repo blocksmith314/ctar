@@ -8,6 +8,7 @@
 #include "src/core/file_handle.h"
 #include "test/tools/dir_compare.h"
 #include "test/tools/file_generator.h"
+#include "xxhash.h"
 #include "test/tools/fixture/blob_store_fixture.h"
 #include "test/tools/test_helpers.h"
 
@@ -259,6 +260,37 @@ namespace ctar
         }
         ASSERT_TRUE(test::AreDirectoriesEqual(source_dir_, unpack_dir_ / source_dir_))
             << "the dir is not match";
+    }
+
+    TEST(BlockStoreHash, FileHashMatchesInlineHash)
+    {
+        const fs::path file = "hash_file_test.bin";
+        const std::string content = "ctar hash test\n";
+        {
+            std::ofstream ofs(file, std::ios::binary | std::ios::trunc);
+            ofs << content;
+        }
+
+        auto from_file = Hash(file.string());
+        ASSERT_TRUE(from_file) << from_file.error().message();
+        EXPECT_EQ(from_file.value(), XXH64(content.data(), content.size(), kHashSeed));
+
+        fs::remove(file);
+    }
+
+    TEST(BlockStoreHash, EmptyAndMissingFile)
+    {
+        const fs::path empty = "hash_empty_test.bin";
+        {
+            std::ofstream ofs(empty, std::ios::binary | std::ios::trunc);
+        }
+        auto empty_hash = Hash(empty.string());
+        ASSERT_TRUE(empty_hash) << empty_hash.error().message();
+        EXPECT_EQ(empty_hash.value(), XXH64(nullptr, 0, kHashSeed));
+        fs::remove(empty);
+
+        // A missing file is reported as an error, not a crash.
+        EXPECT_FALSE(Hash("hash_missing_file.bin"));
     }
 
 
