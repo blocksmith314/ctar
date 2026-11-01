@@ -30,8 +30,8 @@ namespace ctar
     };
 
 
+    /// @brief XXH64 of a file's contents, using the archive hash seed.
     ResultStatus<uint64_t> Hash(const std::string& file_path);
-    ResultStatus<uint64_t> Hash(const void* data, size_t len);
 
     /// @brief Resolve a directory path recorded in an archive under @p root.
     /// The archive is untrusted: a leading root is stripped, and an entry that would

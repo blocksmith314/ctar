@@ -30,15 +30,12 @@ namespace ctar
             return std::unexpected(read_file_status.error());
         }
         auto& read_file = read_file_status.value();
-        uint64_t file_size = 0;
-        if (auto s = read_file->GetFileSize(); !s)
+        auto size_status = read_file->GetFileSize();
+        if (!size_status)
         {
-            file_size = s.value();
+            return std::unexpected(size_status.error());
         }
-        else
-        {
-            return std::unexpected(s.error());
-        }
+        const uint64_t file_size = size_status.value();
         std::vector<char> buf(file_size);
         auto read_status = read_file->Read(file_size, buf.data());
         if (!read_status || read_status.value() != file_size)
