@@ -6,9 +6,12 @@
 #include <ranges>
 #include <sys/stat.h>
 #include <system_error>
+#include <type_traits>
 
 #include "file_format.h"
+#include "src/utils/coding.h"
 #include "src/utils/logger.h"
+#include "src/utils/serialize_helper.h"
 #include "src/utils/tools.h"
 namespace ctar
 {
@@ -253,6 +256,165 @@ namespace ctar
         dir_id_to_child_file_sizes.clear();
     }
 
+    size_t EntryMeta::SerializedSize() const noexcept
+    {
+        return FixedFieldTotalSize(entry_type, permissions, block_id, owner_name, group_name, modify_time, offset,
+                                   file_orig_size, file_compressed_size);
+    }
+
+    void EntryMeta::Serialize(std::string* dst) const
+    {
+        PutFixed32(dst, static_cast<uint32_t>(entry_type));
+        PutFixed32(dst, permissions);
+        PutFixed64(dst, block_id);
+        dst->append(owner_name, sizeof(owner_name));
+        dst->append(group_name, sizeof(group_name));
+        PutFixed64(dst, static_cast<uint64_t>(modify_time));
+        PutFixed64(dst, offset);
+        PutFixed64(dst, file_orig_size);
+        PutFixed64(dst, file_compressed_size);
+    }
+
+    void EntryMeta::Deserialize(const char*& ptr)
+    {
+        entry_type = static_cast<EntryType>(DecodeFixed32(ptr));
+        skip_ptr(ptr, sizeof(uint32_t));
+        permissions = DecodeFixed32(ptr);
+        skip_ptr(ptr, sizeof(uint32_t));
+        block_id = DecodeFixed64(ptr);
+        skip_ptr(ptr, sizeof(uint64_t));
+        std::memcpy(owner_name, ptr, sizeof(owner_name));
+        skip_ptr(ptr, sizeof(owner_name));
+        std::memcpy(group_name, ptr, sizeof(group_name));
+        skip_ptr(ptr, sizeof(group_name));
+        modify_time = static_cast<long long>(DecodeFixed64(ptr));
+        skip_ptr(ptr, sizeof(uint64_t));
+        offset = DecodeFixed64(ptr);
+        skip_ptr(ptr, sizeof(uint64_t));
+        file_orig_size = DecodeFixed64(ptr);
+        skip_ptr(ptr, sizeof(uint64_t));
+        file_compressed_size = DecodeFixed64(ptr);
+        skip_ptr(ptr, sizeof(uint64_t));
+    }
+
+    size_t EntryRecord::SerializedSize() const noexcept
+    {
+        return FixedFieldTotalSize(name_handle.offset, name_handle.len) + entry_meta.SerializedSize();
+    }
+
+    void EntryRecord::Serialize(std::string* dst) const
+    {
+        PutFixed64(dst, name_handle.offset);
+        PutFixed64(dst, name_handle.len);
+        entry_meta.Serialize(dst);
+    }
+
+    void EntryRecord::Deserialize(const char*& ptr)
+    {
+        name_handle.offset = DecodeFixed64(ptr);
+        skip_ptr(ptr, sizeof(uint64_t));
+        name_handle.len = DecodeFixed64(ptr);
+        skip_ptr(ptr, sizeof(uint64_t));
+        entry_meta.Deserialize(ptr);
+    }
+
+    namespace
+    {
+        // SortedMap is a plain container, so the wire format of the maps used by the
+        // archive lives here: count, then one key + value per entry, each field with a
+        // fixed width and little-endian byte order.
+
+        void SerializeEntryRecordMap(const SortedMap<entry_id_t, EntryRecord>& map, std::string* dst)
+        {
+            PutFixed64(dst, map.size());
+            for (const auto& [key, record] : map)
+            {
+                PutFixed64(dst, key);
+                record.Serialize(dst);
+            }
+        }
+
+        void DeserializeEntryRecordMap(const char*& ptr, SortedMap<entry_id_t, EntryRecord>& map)
+        {
+            const uint64_t count = DecodeFixed64(ptr);
+            skip_ptr(ptr, sizeof(uint64_t));
+            map.clear();
+            map.reserve(count);
+            for (uint64_t i = 0; i < count; ++i)
+            {
+                const entry_id_t key = DecodeFixed64(ptr);
+                skip_ptr(ptr, sizeof(uint64_t));
+                EntryRecord record{};
+                record.Deserialize(ptr);
+                map.put(key, std::move(record));
+            }
+        }
+
+        size_t EntryRecordMapSerializedSize(const SortedMap<entry_id_t, EntryRecord>& map)
+        {
+            size_t total = sizeof(uint64_t);
+            for (const auto& [key, record] : map)
+            {
+                total += sizeof(uint64_t) + record.SerializedSize();
+            }
+            return total;
+        }
+
+        template <typename T>
+        void SerializeIdVectorMap(const SortedMap<entry_id_t, std::vector<T>>& map, std::string* dst)
+        {
+            static_assert(std::is_integral_v<T> && sizeof(T) <= sizeof(uint64_t));
+            PutFixed64(dst, map.size());
+            for (const auto& [key, values] : map)
+            {
+                PutFixed64(dst, key);
+                PutFixed64(dst, values.size());
+                for (const T value : values)
+                {
+                    PutFixed64(dst, static_cast<uint64_t>(value));
+                }
+            }
+        }
+
+        template <typename T>
+        void DeserializeIdVectorMap(const char*& ptr, SortedMap<entry_id_t, std::vector<T>>& map)
+        {
+            static_assert(std::is_integral_v<T> && sizeof(T) <= sizeof(uint64_t));
+            const uint64_t count = DecodeFixed64(ptr);
+            skip_ptr(ptr, sizeof(uint64_t));
+            map.clear();
+            map.reserve(count);
+
+            std::vector<T> values;
+            for (uint64_t i = 0; i < count; ++i)
+            {
+                const entry_id_t key = DecodeFixed64(ptr);
+                skip_ptr(ptr, sizeof(uint64_t));
+                const uint64_t value_count = DecodeFixed64(ptr);
+                skip_ptr(ptr, sizeof(uint64_t));
+                values.clear();
+                values.reserve(value_count);
+                for (uint64_t j = 0; j < value_count; ++j)
+                {
+                    values.push_back(static_cast<T>(DecodeFixed64(ptr)));
+                    skip_ptr(ptr, sizeof(uint64_t));
+                }
+                map.put(key, std::move(values));
+            }
+        }
+
+        template <typename T>
+        size_t IdVectorMapSerializedSize(const SortedMap<entry_id_t, std::vector<T>>& map)
+        {
+            size_t total = sizeof(uint64_t);
+            for (const auto& [key, values] : map)
+            {
+                total += 2 * sizeof(uint64_t) + values.size() * sizeof(uint64_t);
+            }
+            return total;
+        }
+    } // namespace
+
     void PackFileMeta::Serialize(std::string* dst) const
     {
         PutFixed64(dst, total_file_count);
@@ -265,12 +427,12 @@ namespace ctar
         PutFixed64(dst, file_name_data.size());
         dst->append(file_name_data);
 
-        dir_entry_records.serialize(dst);
-        file_entry_records.serialize(dst);
+        SerializeEntryRecordMap(dir_entry_records, dst);
+        SerializeEntryRecordMap(file_entry_records, dst);
 
-        dir_id_to_child_dir_ids.serialize(dst);
-        dir_id_to_child_file_ids.serialize(dst);
-        dir_id_to_child_file_sizes.serialize(dst);
+        SerializeIdVectorMap(dir_id_to_child_dir_ids, dst);
+        SerializeIdVectorMap(dir_id_to_child_file_ids, dst);
+        SerializeIdVectorMap(dir_id_to_child_file_sizes, dst);
     }
 
     void PackFileMeta::Deserialize(const char*& ptr)
@@ -294,12 +456,12 @@ namespace ctar
         file_name_data.assign(ptr, file_name_size);
         skip_ptr(ptr, file_name_size);
 
-        dir_entry_records.deserialize(ptr);
-        file_entry_records.deserialize(ptr);
+        DeserializeEntryRecordMap(ptr, dir_entry_records);
+        DeserializeEntryRecordMap(ptr, file_entry_records);
 
-        dir_id_to_child_dir_ids.deserialize(ptr);
-        dir_id_to_child_file_ids.deserialize(ptr);
-        dir_id_to_child_file_sizes.deserialize(ptr);
+        DeserializeIdVectorMap(ptr, dir_id_to_child_dir_ids);
+        DeserializeIdVectorMap(ptr, dir_id_to_child_file_ids);
+        DeserializeIdVectorMap(ptr, dir_id_to_child_file_sizes);
     }
 
     size_t PackFileMeta::SerializedSize() const
@@ -307,11 +469,11 @@ namespace ctar
         size_t total_size =
             FixedFieldTotalSize(total_file_count, total_original_size, total_compressed_size, padding_size);
         total_size += ContainerSerializedTotalSize(dir_name_data, file_name_data);
-        total_size += dir_entry_records.serialized_size();
-        total_size += file_entry_records.serialized_size();
-        total_size += dir_id_to_child_dir_ids.serialized_size();
-        total_size += dir_id_to_child_file_ids.serialized_size();
-        total_size += dir_id_to_child_file_sizes.serialized_size();
+        total_size += EntryRecordMapSerializedSize(dir_entry_records);
+        total_size += EntryRecordMapSerializedSize(file_entry_records);
+        total_size += IdVectorMapSerializedSize(dir_id_to_child_dir_ids);
+        total_size += IdVectorMapSerializedSize(dir_id_to_child_file_ids);
+        total_size += IdVectorMapSerializedSize(dir_id_to_child_file_sizes);
         return total_size;
     }
 

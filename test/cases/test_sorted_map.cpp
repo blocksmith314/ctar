@@ -1,6 +1,7 @@
 
 #include <gtest/gtest.h>
 #include <ranges>
+#include <string>
 #include <vector>
 #include "src/core/sorted_map.h"
 
@@ -29,43 +30,32 @@ namespace ctar
         uint64_t id_ = 0;
     };
 
-    // 故意不实现operator<=>，用于负向编译期约束测试
-    struct BadKeyNoCompare
+    TEST(SortedMap, AcceptsNonTrivialValues)
     {
-        uint64_t val{};
-    };
+        // The container stores values and nothing else: encoding is the archive
+        // format's job, so values no longer have to be trivially copyable.
+        SortedMap<uint64_t, std::string> text_map;
+        text_map.put(2, "two");
+        text_map.put(1, "one");
+        ASSERT_EQ(text_map.size(), 2U);
+        EXPECT_EQ(text_map.find(1)->second, "one");
+        EXPECT_EQ(text_map.begin()->first, 1U); // sorted by key
 
-    TEST(SortedMapConstraints, StandardType)
-    {
-        static_assert(AllowedKeyType<uint64_t>, "Numeric types like uint64_t should be allowed as keys");
-
-        static_assert(AllowedKeyType<int>, "Integer types should be allowed as keys");
-
-        static_assert(!AllowedKeyType<std::string>, "std::string is not permitted for key");
-
-        static_assert(!AllowedKeyType<BadKeyNoCompare>, "Type without operator<=> shall not be allowed as key");
-
-        static_assert(AllowedValueType<int>, "Primitive types should be allowed as values");
-
-        static_assert(AllowedValueType<std::vector<int>>, "Vectors with trivial elements should be allowed as values");
-
-        static_assert(!AllowedValueType<std::vector<std::string>>,
-                      "Vectors with non‑trivial elements (like std::string) should NOT be allowed");
-
-        static_assert(!AllowedValueType<std::string>, "std::string should NOT be allowed");
-
-        static_assert(AllowedValueType<std::array<int, 5>>, "Arrays with trivial elements should be allowed as values");
+        SortedMap<int, std::vector<std::string>> nested;
+        nested.put(1, {"a", "b"});
+        ASSERT_NE(nested.find(1), nested.end());
+        EXPECT_EQ(nested.find(1)->second.size(), 2U);
     }
 
-    TEST(SortedMapConstraints, CustomType)
+    TEST(SortedMap, AcceptsNonTrivialKeys)
     {
-        static_assert(AllowedKeyType<UserId>, "Custom UserId type with operator<=> must satisfy AllowedKeyType");
-
-        static_assert(AllowedValueType<InnerStruct>,
-                      "Simple trivial struct (InnerStruct) must satisfy AllowedValueType");
-
-        static_assert(AllowedValueType<OuterStruct>,
-                      "Nested trivial struct (OuterStruct) must satisfy AllowedValueType");
+        // Keys only need to be ordered.
+        SortedMap<std::string, int> by_name;
+        by_name.put("beta", 2);
+        by_name.put("alpha", 1);
+        ASSERT_EQ(by_name.size(), 2U);
+        EXPECT_EQ(by_name.begin()->first, "alpha");
+        EXPECT_EQ(by_name.rbegin()->first, "beta");
     }
 
     TEST(SortedMap, PutOrderedInsert)

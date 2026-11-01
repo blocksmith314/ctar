@@ -6,6 +6,7 @@
 
 #include "src/core/block_store.h"
 #include "src/core/file_handle.h"
+#include "src/utils/coding.h"
 #include "test/tools/dir_compare.h"
 #include "test/tools/file_generator.h"
 #include "test/tools/fixture/blob_store_fixture.h"

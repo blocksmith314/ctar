@@ -1,10 +1,13 @@
 #include <fstream>
+#include <string_view>
 #include <grp.h>
 #include <gtest/gtest.h>
 #include <pwd.h>
 #include <sys/stat.h>
 #include "gmock/gmock-matchers.h"
 #include "src/core/file_format.h"
+#include "src/utils/serialize_helper.h"
+#include "src/utils/tools.h"
 #include "test/tools/fixture/blob_store_fixture.h"
 #include "test/tools/test_helpers.h"
 namespace ctar
@@ -537,6 +540,93 @@ namespace ctar
         EXPECT_EQ(handle.TotalFileCnt(), 1U);
 
         fs::remove_all(dir);
+    }
+
+    namespace
+    {
+        std::string ToHex(std::string_view data)
+        {
+            static constexpr char kDigits[] = "0123456789abcdef";
+            std::string out;
+            out.reserve(data.size() * 2);
+            for (const unsigned char byte : data)
+            {
+                out += kDigits[byte >> 4];
+                out += kDigits[byte & 0x0F];
+            }
+            return out;
+        }
+
+        EntryRecord MakeGoldenEntryRecord()
+        {
+            EntryRecord rec{};
+            rec.name_handle = {0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL};
+            rec.entry_meta.entry_type = EntryType::DIRECTORY;
+            rec.entry_meta.permissions = 0750;
+            rec.entry_meta.block_id = 0x0102030405060708ULL;
+            std::snprintf(rec.entry_meta.owner_name, sizeof(rec.entry_meta.owner_name), "alice");
+            std::snprintf(rec.entry_meta.group_name, sizeof(rec.entry_meta.group_name), "staff");
+            rec.entry_meta.modify_time = -1234567890123LL;
+            rec.entry_meta.offset = 4096;
+            rec.entry_meta.file_orig_size = 1234;
+            rec.entry_meta.file_compressed_size = 999;
+            return rec;
+        }
+    } // namespace
+
+    TEST(EntryMetaSerialization, RoundTripAndSize)
+    {
+        EntryMeta meta = MakeGoldenEntryRecord().entry_meta;
+
+        std::string buf;
+        meta.Serialize(&buf);
+        EXPECT_EQ(buf.size(), meta.SerializedSize());
+        EXPECT_EQ(buf.size(), 176U);
+
+        const char* ptr = buf.data();
+        EntryMeta decoded{};
+        decoded.Deserialize(ptr);
+        EXPECT_EQ(decoded.entry_type, meta.entry_type);
+        EXPECT_EQ(decoded.permissions, meta.permissions);
+        EXPECT_EQ(decoded.block_id, meta.block_id);
+        EXPECT_STREQ(decoded.owner_name, meta.owner_name);
+        EXPECT_STREQ(decoded.group_name, meta.group_name);
+        EXPECT_EQ(decoded.modify_time, meta.modify_time);
+        EXPECT_EQ(decoded.offset, meta.offset);
+        EXPECT_EQ(decoded.file_orig_size, meta.file_orig_size);
+        EXPECT_EQ(decoded.file_compressed_size, meta.file_compressed_size);
+        EXPECT_EQ(ptr, buf.data() + buf.size());
+    }
+
+    TEST(EntryRecordSerialization, GoldenBytes)
+    {
+        // Pins the on-disk record: 16-byte handle + 176-byte metadata, field by field,
+        // little endian. A failure here means the archive format changed and
+        // kFileFormatVersion has to be bumped.
+        constexpr std::string_view kGoldenHex =
+            "887766554433221100ffeeddccbbaa9901000000e80100000807060504030201"
+            "616c696365000000000000000000000000000000000000000000000000000000"
+            "0000000000000000000000000000000000000000000000000000000000000000"
+            "7374616666000000000000000000000000000000000000000000000000000000"
+            "0000000000000000000000000000000000000000000000000000000000000000"
+            "35fb048ee0feffff0010000000000000d204000000000000e703000000000000";
+
+        const EntryRecord rec = MakeGoldenEntryRecord();
+        std::string buf;
+        rec.Serialize(&buf);
+        EXPECT_EQ(buf.size(), rec.SerializedSize());
+        EXPECT_EQ(buf.size(), 192U);
+        EXPECT_EQ(ToHex(buf), kGoldenHex);
+
+        const char* ptr = buf.data();
+        EntryRecord decoded{};
+        decoded.Deserialize(ptr);
+        EXPECT_EQ(decoded.name_handle.offset, rec.name_handle.offset);
+        EXPECT_EQ(decoded.name_handle.len, rec.name_handle.len);
+        EXPECT_EQ(decoded.entry_meta.block_id, rec.entry_meta.block_id);
+        EXPECT_STREQ(decoded.entry_meta.owner_name, rec.entry_meta.owner_name);
+        EXPECT_EQ(decoded.entry_meta.modify_time, rec.entry_meta.modify_time);
+        EXPECT_EQ(ptr, buf.data() + buf.size());
     }
 
 
