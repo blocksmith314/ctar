@@ -2,11 +2,13 @@
 #define CTAR_FORMAT_H
 #include <cassert>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <numeric>
 #include <ostream>
 #include <ranges>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "options.h"
@@ -148,6 +150,13 @@ namespace ctar
         uint64_t file_orig_size;
         uint64_t file_compressed_size;
 
+        /// Serialized form: 4 + 4 + 8 + 64 + 64 + 8 + 8 + 8 + 8 bytes, little endian,
+        /// field order as declared above. This is the on-disk layout, so changing it
+        /// requires bumping kFileFormatVersion.
+        [[nodiscard]] size_t SerializedSize() const noexcept;
+        void Serialize(std::string* dst) const;
+        void Deserialize(const char*& ptr);
+
         /// @brief Format  output stream
         /// @param os output stream
         /// @param dir_file_ref Path starting from designated base directory
@@ -172,6 +181,11 @@ namespace ctar
         Handle name_handle;
         // Metadata for entry, valid for both file and directory
         EntryMeta entry_meta;
+
+        /// Serialized form: handle (16 bytes) followed by EntryMeta, 192 bytes in total.
+        [[nodiscard]] size_t SerializedSize() const noexcept;
+        void Serialize(std::string* dst) const;
+        void Deserialize(const char*& ptr);
     };
 
     struct FileStats

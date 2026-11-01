@@ -4,6 +4,7 @@
 #include <array>
 #include <filesystem>
 #include <string_view>
+#include <type_traits>
 namespace ctar
 {
 
@@ -24,13 +25,11 @@ namespace ctar
 
     inline void skip_ptr(const char*& p, size_t byte) noexcept { p += byte; }
 
-    constexpr size_t kDefaultBufferSize = 4096;
-
-
     template <typename T>
     static constexpr size_t FixedFieldSize(const T&) noexcept
     {
-        return sizeof(std::decay_t<T>);
+        // remove_cvref_t keeps array extents: decay_t would turn char[64] into char*.
+        return sizeof(std::remove_cvref_t<T>);
     }
 
     template <typename... Fields>

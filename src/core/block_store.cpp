@@ -12,6 +12,8 @@
 #include "block_store.h"
 #include "compress.h"
 #include "file_handle.h"
+#include "src/utils/serialize_helper.h"
+#include "src/utils/coding.h"
 #include "src/utils/logger.h"
 #include "src/utils/status.h"
 
