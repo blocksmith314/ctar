@@ -85,10 +85,41 @@ namespace ctar
 
         uint64_t last_write_block_id_ = 0;
 
-        struct BlockBuffer
+        /// A byte buffer whose contents are only ever written through Data().
+        ///
+        /// A raw allocation is used on purpose: `new char[n]` leaves the bytes
+        /// uninitialised (no zeroing cost), and raw memory is outside the container
+        /// annotations that make ASan report writes past a std::string's size.
+        struct RawBuffer
         {
-            std::string data;
+            std::unique_ptr<char[]> data;
+            size_t capacity = 0;
+
+            void EnsureCapacity(size_t bytes)
+            {
+                if (capacity < bytes)
+                {
+                    // `new char[n]` is default-initialisation: the bytes stay
+                    // uninitialised. `new char[n]()` or `std::make_unique<char[]>(n)`
+                    // would value-initialise (zero) the buffer -- do not switch to
+                    // those unless the zeroing is actually wanted.
+                    data.reset(new char[bytes]);
+                    capacity = bytes;
+                }
+            }
+
+            [[nodiscard]] char* Data() noexcept { return data.get(); }
+            [[nodiscard]] const char* Data() const noexcept { return data.get(); }
+            [[nodiscard]] size_t Capacity() const noexcept { return capacity; }
+            void Release() noexcept
+            {
+                data.reset();
+                capacity = 0;
+            }
         };
+
+        /// One compressed block payload, recycled through the buffer pool.
+        using BlockBuffer = RawBuffer;
 
         struct PendingWriteItem
         {

@@ -166,10 +166,10 @@ namespace ctar
         {
             return;
         }
-        buffer->data.clear();
-        if (buffer->data.capacity() > kMaxFileSizePerBlock)
+        // Blocks larger than the normal ceiling are not worth keeping in the pool.
+        if (buffer->Capacity() > kMaxFileSizePerBlock)
         {
-            std::string().swap(buffer->data);
+            buffer->Release();
         }
         {
             std::lock_guard lock(pack_queue_mutex_);
@@ -191,10 +191,10 @@ namespace ctar
                 {
                     continue;
                 }
-                buffer->data.clear();
-                if (buffer->data.capacity() > kMaxFileSizePerBlock)
+                // Blocks larger than the normal ceiling are not worth keeping in the pool.
+                if (buffer->Capacity() > kMaxFileSizePerBlock)
                 {
-                    std::string().swap(buffer->data);
+                    buffer->Release();
                 }
                 available_block_buffers_.push_back(std::move(buffer));
             }
@@ -267,7 +267,7 @@ namespace ctar
                     // zero-length iovec for it would only waste a syscall.
                     if (task.block_size > 0)
                     {
-                        iovs.push_back({.iov_base = pending.buffer->data.data(), .iov_len = task.block_size});
+                        iovs.push_back({.iov_base = pending.buffer->Data(), .iov_len = task.block_size});
                     }
                     block_region_size_ += task.block_size;
                 }
@@ -300,9 +300,8 @@ namespace ctar
 
     Status BlockStore::PackTask(DataBlockMeta& block_meta)
     {
-        thread_local std::vector<char> tls_read_buf;
-        tls_read_buf.clear();
-        tls_read_buf.reserve(block_meta.dir_stats.max_file_size);
+        thread_local RawBuffer tls_read_buf;
+        tls_read_buf.EnsureCapacity(block_meta.dir_stats.max_file_size);
         auto compress_buffer = AcquireBlockBuffer();
         if (!compress_buffer)
         {
@@ -313,10 +312,9 @@ namespace ctar
             }
             return error_run_time("pack buffer unavailable");
         }
-        compress_buffer->data.clear();
         auto compress_buffer_size =
             compress::MaxCompressBufferSize(compression_config_.compression_type, block_meta.block_size);
-        compress_buffer->data.reserve(static_cast<size_t>(compress_buffer_size));
+        compress_buffer->EnsureCapacity(static_cast<size_t>(compress_buffer_size));
 
         uint64_t payload_offset = 0;
         size_t file_count = block_meta.file_ids.size();
@@ -347,7 +345,7 @@ namespace ctar
                 if (auto read_file_status = NewPosixReadFile(file_path))
                 {
                     auto& rf = read_file_status.value();
-                    auto read_status = rf->Read(original_size, tls_read_buf.data());
+                    auto read_status = rf->Read(original_size, tls_read_buf.Data());
                     if (!read_status || read_status.value() != original_size)
                     {
                         ReturnBlockBuffer(std::move(compress_buffer));
@@ -363,11 +361,11 @@ namespace ctar
             bool skip_compression = ShouldSkipCompression(file_name_status.value());
 
             const bool can_compress = !skip_compression && original_size <= kMaxInputSize && original_size > 0;
-            block_meta.file_hashes[i] = XXH64(tls_read_buf.data(), original_size, kHashSeed);
+            block_meta.file_hashes[i] = XXH64(tls_read_buf.Data(), original_size, kHashSeed);
             if (can_compress)
             {
-                compressed_size = compress::Compress(compression_type, tls_read_buf.data(),
-                                                     compress_buffer->data.data() + payload_offset, original_size,
+                compressed_size = compress::Compress(compression_type, tls_read_buf.Data(),
+                                                     compress_buffer->Data() + payload_offset, original_size,
                                                      compression_config_.compression_param);
                 if (compressed_size > 0 && compressed_size < original_size)
                 {
@@ -384,8 +382,8 @@ namespace ctar
             // 3. compress failed
             if (!has_compressed && original_size > 0)
             {
-                compressed_size = compress::Compress(CompressionType::kNone, tls_read_buf.data(),
-                                                     compress_buffer->data.data() + payload_offset, original_size);
+                compressed_size = compress::Compress(CompressionType::kNone, tls_read_buf.Data(),
+                                                     compress_buffer->Data() + payload_offset, original_size);
                 compression_type = CompressionType::kNone;
             }
             block_meta.file_offsets[i] = payload_offset;
@@ -406,8 +404,7 @@ namespace ctar
     Status BlockStore::UnPackTask(const DataBlockMeta& block_meta)
     {
         thread_local std::unique_ptr<ReadFile> read_file_ptr;
-        thread_local std::vector<char> tls_block_buf;
-        tls_block_buf.clear();
+        thread_local RawBuffer tls_block_buf;
         if (!read_file_ptr)
         {
             auto read_file_status = NewPosixReadFile(packed_file_);
@@ -418,10 +415,10 @@ namespace ctar
             read_file_ptr = std::move(read_file_status.value());
         }
         uint64_t block_beg_pos = meta_region_size_ + block_meta.block_file_offset;
-        tls_block_buf.reserve(block_meta.block_size);
+        tls_block_buf.EnsureCapacity(block_meta.block_size);
 
         ResultStatus<size_t> read_status =
-            read_file_ptr->RandomRead(block_beg_pos, block_meta.block_size, tls_block_buf.data());
+            read_file_ptr->RandomRead(block_beg_pos, block_meta.block_size, tls_block_buf.Data());
 
         if (!read_status || read_status.value() != block_meta.block_size)
         {
@@ -433,7 +430,7 @@ namespace ctar
         // and refuse anything that would land outside it.
         const fs::path out_root(target_path_);
         const fs::path archive_dir(std::string(block_meta.dir_stats.dir_path));
-        std::string decompress_buffer;
+        RawBuffer decompress_buffer;
         uint64_t hash_value;
         for (size_t i = 0; i < file_count; ++i)
         {
@@ -452,15 +449,15 @@ namespace ctar
             const std::string output_file_name = output_path.value().string();
             if (block_meta.file_orig_sizes[i] > 0)
             {
-                decompress_buffer.reserve(block_meta.file_orig_sizes[i]);
+                decompress_buffer.EnsureCapacity(block_meta.file_orig_sizes[i]);
                 auto decompress_size = compress::Decompress(
-                    block_meta.file_compressed_types[i], tls_block_buf.data() + file_offset, decompress_buffer.data(),
+                    block_meta.file_compressed_types[i], tls_block_buf.Data() + file_offset, decompress_buffer.Data(),
                     block_meta.file_compressed_sizes[i], block_meta.file_orig_sizes[i]);
                 if (decompress_size != block_meta.file_orig_sizes[i])
                 {
                     return error_corruption("failed to decompress file: {}", output_file_name);
                 }
-                hash_value = XXH64(decompress_buffer.data(), block_meta.file_orig_sizes[i], kHashSeed);
+                hash_value = XXH64(decompress_buffer.Data(), block_meta.file_orig_sizes[i], kHashSeed);
             }
             else
             {
@@ -478,7 +475,7 @@ namespace ctar
                 return error_io("failed to create file: {} for write", output_file_name);
             }
             auto& w_file = w_file_status.value();
-            Status write_status = w_file->Write(block_meta.file_orig_sizes[i], decompress_buffer.data());
+            Status write_status = w_file->Write(block_meta.file_orig_sizes[i], decompress_buffer.Data());
             if (!write_status)
             {
                 return write_status;
@@ -726,6 +723,10 @@ namespace ctar
         {
             meta.Serialize(&buffer);
         }
+        // Grow the buffer to the aligned region size so its size matches what is
+        // written; resize() zero-fills the tail, which also keeps the padding defined
+        // (an archive must not contain uninitialised bytes).
+        buffer.resize(meta_region_size_);
         const auto total_size = static_cast<ssize_t>(meta_region_size_);
 
         status = write_file->Write(total_size, buffer.data());
