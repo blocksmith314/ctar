@@ -16,7 +16,45 @@
 namespace ctar
 {
 
+namespace
+{
+    // --- bounds-checked decoding -------------------------------------------------
+    // The archive is untrusted: every size and count read from it is validated
+    // against the bytes that are actually present before anything is allocated.
 
+    constexpr size_t kHandleSize = 2 * sizeof(uint64_t);
+    constexpr size_t kEntryMetaSize = 176;
+    constexpr size_t kEntryRecordSize = kHandleSize + kEntryMetaSize;        // 192
+    constexpr size_t kMapEntryMinSize = sizeof(uint64_t) + kEntryRecordSize; // 200
+    constexpr size_t kIdVectorMapEntryMinSize = 2 * sizeof(uint64_t);        // 16
+
+    [[nodiscard]] bool HasBytes(const char* ptr, const char* end, size_t need) noexcept
+    {
+        return ptr != nullptr && end != nullptr && ptr <= end && static_cast<size_t>(end - ptr) >= need;
+    }
+
+    [[nodiscard]] Status TruncatedMetadata()
+    {
+        return error_corruption("corrupt archive: metadata is truncated");
+    }
+
+    [[nodiscard]] Status CorruptBlockMeta()
+    {
+        return error_corruption("corrupt archive: inconsistent block metadata");
+    }
+
+    [[nodiscard]] Status ReadFixed64(const char*& ptr, const char* end, uint64_t& value)
+    {
+        if (!HasBytes(ptr, end, sizeof(uint64_t)))
+        {
+            return TruncatedMetadata();
+        }
+        value = DecodeFixed64(ptr);
+        ptr += sizeof(uint64_t);
+        return {};
+    }
+
+}
 
     void EntryMeta::FormatOutput(std::ostream& os, const DirFileRef& dir_file_ref, const OutputMode mode,
                                  const bool human_readable, const ListColWidths& col_widths) const
@@ -64,9 +102,12 @@ namespace ctar
         PutFixed64(dst, file_meta_size);
     }
 
-    // TODO: Magic number validation here is not appropriate.
-    Status PackFileHeader::Deserialize(const char*& ptr)
+    Status PackFileHeader::Deserialize(const char*& ptr, const char* end)
     {
+        if (!HasBytes(ptr, end, SerializedSize()))
+        {
+            return TruncatedMetadata();
+        }
         magic_number = DecodeFixed32(ptr);
         ptr += sizeof(uint32_t);
         if (magic_number != kMagicNumber)
@@ -74,9 +115,19 @@ namespace ctar
             return error_corruption("Invalid magic number");
         }
         const uint32_t version_number = DecodeFixed32(ptr);
-        file_format_version = Version::Decode(version_number);
         ptr += sizeof(uint32_t);
+        file_format_version = Version::Decode(version_number);
+        // Refuse archives written by a newer format: reading their entries would be a
+        // guess, and old readers must not misinterpret new entry types.
+        if (file_format_version.major > kFileFormatVersion.major ||
+            (file_format_version.major == kFileFormatVersion.major &&
+             file_format_version.minor > kFileFormatVersion.minor))
+        {
+            return error_corruption("archive format {} is newer than the supported {}",
+                                    file_format_version.to_string(), kFileFormatVersion.to_string());
+        }
         file_meta_size = DecodeFixed64(ptr);
+        ptr += sizeof(uint64_t);
         return {};
     }
 
@@ -150,81 +201,115 @@ namespace ctar
         }
     }
 
-    Status DataBlockMeta::Deserialize(const char*& ptr)
+    Status DataBlockMeta::Deserialize(const char*& ptr, const char* end)
     {
+        if (!HasBytes(ptr, end, 6 * sizeof(uint64_t)))
+        {
+            return TruncatedMetadata();
+        }
         block_id = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
+        ptr += sizeof(uint64_t);
         dir_id = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
+        ptr += sizeof(uint64_t);
         block_file_offset = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
+        ptr += sizeof(uint64_t);
         payload_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
+        ptr += sizeof(uint64_t);
         block_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
+        ptr += sizeof(uint64_t);
         hash_value = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
+        ptr += sizeof(uint64_t);
 
-        /* file_ids */
-        const uint64_t file_ids_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        file_ids.resize(file_ids_size);
-        if (file_ids_size > 0)
+        uint64_t file_count = 0;
+        if (auto s = ReadFixed64(ptr, end, file_count); !s)
         {
-            std::memcpy(file_ids.data(), ptr, file_ids_size * sizeof(entry_id_t));
-            ptr += file_ids_size * sizeof(entry_id_t);
+            return s;
+        }
+        if (file_count > static_cast<uint64_t>(end - ptr) / sizeof(entry_id_t))
+        {
+            return TruncatedMetadata();
+        }
+        file_ids.resize(static_cast<size_t>(file_count));
+        if (!file_ids.empty())
+        {
+            std::memcpy(file_ids.data(), ptr, file_ids.size() * sizeof(entry_id_t));
+            ptr += file_ids.size() * sizeof(entry_id_t);
         }
 
-        /* file_orig_sizes */
-        uint64_t original_file_sizes = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        file_orig_sizes.resize(original_file_sizes);
-        if (original_file_sizes > 0)
+        // All per-file vectors must describe exactly the same files; otherwise unpacking
+        // would index past the end of one of them.
+        const auto read_u64_vector = [&](std::vector<uint64_t>& values) -> Status
         {
-            std::memcpy(file_orig_sizes.data(), ptr, original_file_sizes * sizeof(uint64_t));
-            ptr += original_file_sizes * sizeof(uint64_t);
+            uint64_t count = 0;
+            if (auto s = ReadFixed64(ptr, end, count); !s)
+            {
+                return s;
+            }
+            if (count != file_count)
+            {
+                return CorruptBlockMeta();
+            }
+            if (count > static_cast<uint64_t>(end - ptr) / sizeof(uint64_t))
+            {
+                return TruncatedMetadata();
+            }
+            values.resize(static_cast<size_t>(count));
+            if (!values.empty())
+            {
+                std::memcpy(values.data(), ptr, values.size() * sizeof(uint64_t));
+                ptr += values.size() * sizeof(uint64_t);
+            }
+            return {};
+        };
+
+        if (auto s = read_u64_vector(file_orig_sizes); !s)
+        {
+            return s;
+        }
+        if (auto s = read_u64_vector(file_compressed_sizes); !s)
+        {
+            return s;
         }
 
-        /* file_compressed_sizes */
-        uint64_t compressed_file_sizes = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        file_compressed_sizes.resize(compressed_file_sizes);
-        if (compressed_file_sizes > 0)
+        /* file_compressed_types: one byte per file */
+        uint64_t type_count = 0;
+        if (auto s = ReadFixed64(ptr, end, type_count); !s)
         {
-            std::memcpy(file_compressed_sizes.data(), ptr, compressed_file_sizes * sizeof(uint64_t));
-            ptr += compressed_file_sizes * sizeof(uint64_t);
+            return s;
         }
-
-        /* file_compressed_types */
-        uint64_t compressed_file_types = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        file_compressed_types.resize(compressed_file_types);
+        if (type_count != file_count || type_count > static_cast<uint64_t>(end - ptr))
+        {
+            return CorruptBlockMeta();
+        }
+        file_compressed_types.resize(static_cast<size_t>(type_count));
         for (CompressionType& type : file_compressed_types)
         {
             type = static_cast<CompressionType>(DecodeFixed8(ptr));
             ptr += sizeof(uint8_t);
         }
 
-        /* file_offsets */
-        uint64_t file_offsets_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        file_offsets.resize(file_offsets_size);
-        if (file_offsets_size > 0)
+        if (auto s = read_u64_vector(file_offsets); !s)
         {
-            std::memcpy(file_offsets.data(), ptr, file_offsets_size * sizeof(uint64_t));
-            ptr += file_offsets_size * sizeof(uint64_t);
+            return s;
+        }
+        if (auto s = read_u64_vector(file_hashes); !s)
+        {
+            return s;
         }
 
-        /* file_hashes */
-        const uint64_t file_xxhash_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        file_hashes.resize(file_xxhash_size);
-        if (file_xxhash_size > 0)
+        // The block has to be internally consistent: the payload has to fit in the block
+        // and every compressed file has to fit in the payload.
+        if (payload_size > block_size)
         {
-            std::memcpy(file_hashes.data(), ptr, file_xxhash_size * sizeof(uint64_t));
-            ptr += file_xxhash_size * sizeof(uint64_t);
+            return CorruptBlockMeta();
         }
-
+        for (size_t i = 0; i < file_ids.size(); ++i)
+        {
+            if (file_offsets[i] > payload_size || file_compressed_sizes[i] > payload_size - file_offsets[i])
+            {
+                return CorruptBlockMeta();
+            }
+        }
         return {};
     }
 
@@ -275,26 +360,36 @@ namespace ctar
         PutFixed64(dst, file_compressed_size);
     }
 
-    void EntryMeta::Deserialize(const char*& ptr)
+    Status EntryMeta::Deserialize(const char*& ptr, const char* end)
     {
+        if (!HasBytes(ptr, end, kEntryMetaSize))
+        {
+            return TruncatedMetadata();
+        }
         entry_type = static_cast<EntryType>(DecodeFixed32(ptr));
-        skip_ptr(ptr, sizeof(uint32_t));
+        ptr += sizeof(uint32_t);
         permissions = DecodeFixed32(ptr);
-        skip_ptr(ptr, sizeof(uint32_t));
+        ptr += sizeof(uint32_t);
         block_id = DecodeFixed64(ptr);
-        skip_ptr(ptr, sizeof(uint64_t));
+        ptr += sizeof(uint64_t);
         std::memcpy(owner_name, ptr, sizeof(owner_name));
-        skip_ptr(ptr, sizeof(owner_name));
+        ptr += sizeof(owner_name);
         std::memcpy(group_name, ptr, sizeof(group_name));
-        skip_ptr(ptr, sizeof(group_name));
+        ptr += sizeof(group_name);
         modify_time = static_cast<long long>(DecodeFixed64(ptr));
-        skip_ptr(ptr, sizeof(uint64_t));
+        ptr += sizeof(uint64_t);
         offset = DecodeFixed64(ptr);
-        skip_ptr(ptr, sizeof(uint64_t));
+        ptr += sizeof(uint64_t);
         file_orig_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, sizeof(uint64_t));
+        ptr += sizeof(uint64_t);
         file_compressed_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, sizeof(uint64_t));
+        ptr += sizeof(uint64_t);
+
+        if (entry_type != EntryType::REGULAR && entry_type != EntryType::DIRECTORY)
+        {
+            return error_corruption("corrupt archive: unknown entry type {}", static_cast<uint32_t>(entry_type));
+        }
+        return {};
     }
 
     size_t EntryRecord::SerializedSize() const noexcept
@@ -309,17 +404,22 @@ namespace ctar
         entry_meta.Serialize(dst);
     }
 
-    void EntryRecord::Deserialize(const char*& ptr)
+    Status EntryRecord::Deserialize(const char*& ptr, const char* end)
     {
+        if (!HasBytes(ptr, end, kHandleSize))
+        {
+            return TruncatedMetadata();
+        }
         name_handle.offset = DecodeFixed64(ptr);
-        skip_ptr(ptr, sizeof(uint64_t));
+        ptr += sizeof(uint64_t);
         name_handle.len = DecodeFixed64(ptr);
-        skip_ptr(ptr, sizeof(uint64_t));
-        entry_meta.Deserialize(ptr);
+        ptr += sizeof(uint64_t);
+        return entry_meta.Deserialize(ptr, end);
     }
 
     namespace
     {
+
         // SortedMap is a plain container, so the wire format of the maps used by the
         // archive lives here: count, then one key + value per entry, each field with a
         // fixed width and little-endian byte order.
@@ -334,20 +434,35 @@ namespace ctar
             }
         }
 
-        void DeserializeEntryRecordMap(const char*& ptr, SortedMap<entry_id_t, EntryRecord>& map)
+        Status DeserializeEntryRecordMap(const char*& ptr, const char* end, SortedMap<entry_id_t, EntryRecord>& map)
         {
-            const uint64_t count = DecodeFixed64(ptr);
-            skip_ptr(ptr, sizeof(uint64_t));
+            uint64_t count = 0;
+            if (auto s = ReadFixed64(ptr, end, count); !s)
+            {
+                return s;
+            }
+            // Reject an impossible count before allocating anything for it.
+            if (count > static_cast<uint64_t>(end - ptr) / kMapEntryMinSize)
+            {
+                return TruncatedMetadata();
+            }
             map.clear();
-            map.reserve(count);
+            map.reserve(static_cast<size_t>(count));
             for (uint64_t i = 0; i < count; ++i)
             {
-                const entry_id_t key = DecodeFixed64(ptr);
-                skip_ptr(ptr, sizeof(uint64_t));
+                entry_id_t key = 0;
+                if (auto s = ReadFixed64(ptr, end, key); !s)
+                {
+                    return s;
+                }
                 EntryRecord record{};
-                record.Deserialize(ptr);
+                if (auto s = record.Deserialize(ptr, end); !s)
+                {
+                    return s;
+                }
                 map.put(key, std::move(record));
             }
+            return {};
         }
 
         size_t EntryRecordMapSerializedSize(const SortedMap<entry_id_t, EntryRecord>& map)
@@ -377,30 +492,52 @@ namespace ctar
         }
 
         template <typename T>
-        void DeserializeIdVectorMap(const char*& ptr, SortedMap<entry_id_t, std::vector<T>>& map)
+        Status DeserializeIdVectorMap(const char*& ptr, const char* end, SortedMap<entry_id_t, std::vector<T>>& map)
         {
             static_assert(std::is_integral_v<T> && sizeof(T) <= sizeof(uint64_t));
-            const uint64_t count = DecodeFixed64(ptr);
-            skip_ptr(ptr, sizeof(uint64_t));
+            uint64_t count = 0;
+            if (auto s = ReadFixed64(ptr, end, count); !s)
+            {
+                return s;
+            }
+            if (count > static_cast<uint64_t>(end - ptr) / kIdVectorMapEntryMinSize)
+            {
+                return TruncatedMetadata();
+            }
             map.clear();
-            map.reserve(count);
+            map.reserve(static_cast<size_t>(count));
 
             std::vector<T> values;
             for (uint64_t i = 0; i < count; ++i)
             {
-                const entry_id_t key = DecodeFixed64(ptr);
-                skip_ptr(ptr, sizeof(uint64_t));
-                const uint64_t value_count = DecodeFixed64(ptr);
-                skip_ptr(ptr, sizeof(uint64_t));
+                entry_id_t key = 0;
+                uint64_t value_count = 0;
+                if (auto s = ReadFixed64(ptr, end, key); !s)
+                {
+                    return s;
+                }
+                if (auto s = ReadFixed64(ptr, end, value_count); !s)
+                {
+                    return s;
+                }
+                if (value_count > static_cast<uint64_t>(end - ptr) / sizeof(uint64_t))
+                {
+                    return TruncatedMetadata();
+                }
                 values.clear();
-                values.reserve(value_count);
+                values.reserve(static_cast<size_t>(value_count));
                 for (uint64_t j = 0; j < value_count; ++j)
                 {
-                    values.push_back(static_cast<T>(DecodeFixed64(ptr)));
-                    skip_ptr(ptr, sizeof(uint64_t));
+                    uint64_t value = 0;
+                    if (auto s = ReadFixed64(ptr, end, value); !s)
+                    {
+                        return s;
+                    }
+                    values.push_back(static_cast<T>(value));
                 }
                 map.put(key, std::move(values));
             }
+            return {};
         }
 
         template <typename T>
@@ -435,33 +572,96 @@ namespace ctar
         SerializeIdVectorMap(dir_id_to_child_file_sizes, dst);
     }
 
-    void PackFileMeta::Deserialize(const char*& ptr)
+    Status PackFileMeta::Deserialize(const char*& ptr, const char* end)
     {
-        total_file_count = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        total_original_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        total_compressed_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        padding_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
+        Clear();
 
-        const uint64_t dir_name_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        dir_name_data.assign(ptr, dir_name_size);
-        skip_ptr(ptr, dir_name_size);
+        if (auto s = ReadFixed64(ptr, end, total_file_count); !s)
+        {
+            return s;
+        }
+        if (auto s = ReadFixed64(ptr, end, total_original_size); !s)
+        {
+            return s;
+        }
+        if (auto s = ReadFixed64(ptr, end, total_compressed_size); !s)
+        {
+            return s;
+        }
+        if (auto s = ReadFixed64(ptr, end, padding_size); !s)
+        {
+            return s;
+        }
 
-        const uint64_t file_name_size = DecodeFixed64(ptr);
-        skip_ptr(ptr, FIX64_LEN);
-        file_name_data.assign(ptr, file_name_size);
-        skip_ptr(ptr, file_name_size);
+        uint64_t dir_name_size = 0;
+        if (auto s = ReadFixed64(ptr, end, dir_name_size); !s)
+        {
+            return s;
+        }
+        if (dir_name_size > static_cast<uint64_t>(end - ptr))
+        {
+            return TruncatedMetadata();
+        }
+        dir_name_data.assign(ptr, static_cast<size_t>(dir_name_size));
+        ptr += dir_name_size;
 
-        DeserializeEntryRecordMap(ptr, dir_entry_records);
-        DeserializeEntryRecordMap(ptr, file_entry_records);
+        uint64_t file_name_size = 0;
+        if (auto s = ReadFixed64(ptr, end, file_name_size); !s)
+        {
+            return s;
+        }
+        if (file_name_size > static_cast<uint64_t>(end - ptr))
+        {
+            return TruncatedMetadata();
+        }
+        file_name_data.assign(ptr, static_cast<size_t>(file_name_size));
+        ptr += file_name_size;
 
-        DeserializeIdVectorMap(ptr, dir_id_to_child_dir_ids);
-        DeserializeIdVectorMap(ptr, dir_id_to_child_file_ids);
-        DeserializeIdVectorMap(ptr, dir_id_to_child_file_sizes);
+        if (auto s = DeserializeEntryRecordMap(ptr, end, dir_entry_records); !s)
+        {
+            return s;
+        }
+        if (auto s = DeserializeEntryRecordMap(ptr, end, file_entry_records); !s)
+        {
+            return s;
+        }
+        if (auto s = DeserializeIdVectorMap(ptr, end, dir_id_to_child_dir_ids); !s)
+        {
+            return s;
+        }
+        if (auto s = DeserializeIdVectorMap(ptr, end, dir_id_to_child_file_ids); !s)
+        {
+            return s;
+        }
+        if (auto s = DeserializeIdVectorMap(ptr, end, dir_id_to_child_file_sizes); !s)
+        {
+            return s;
+        }
+
+        // Name handles are offsets into the two string buffers; a corrupt handle would
+        // make every later lookup read outside them.
+        const auto validate_handles = [](const SortedMap<entry_id_t, EntryRecord>& records,
+                                         const std::string& buffer) -> Status
+        {
+            for (const auto& [key, record] : records)
+            {
+                const auto& handle = record.name_handle;
+                if (handle.offset > buffer.size() || handle.len > buffer.size() - handle.offset)
+                {
+                    return error_corruption("corrupt archive: entry {} points outside the name buffer", key);
+                }
+            }
+            return {};
+        };
+        if (auto s = validate_handles(dir_entry_records, dir_name_data); !s)
+        {
+            return s;
+        }
+        if (auto s = validate_handles(file_entry_records, file_name_data); !s)
+        {
+            return s;
+        }
+        return {};
     }
 
     size_t PackFileMeta::SerializedSize() const
@@ -607,17 +807,18 @@ namespace ctar
 
     void PackFileHandle::SerializePackFileMeta(std::string* dst) const { pack_file_meta_.Serialize(dst); }
 
-    Status PackFileHandle::DeserializePackFileMeta(const char*& ptr)
+    Status PackFileHandle::DeserializePackFileMeta(const char*& ptr, const char* end)
     {
-        pack_file_meta_.Deserialize(ptr);
+        dir_path_to_dir_id_.clear();
+        if (auto status = pack_file_meta_.Deserialize(ptr, end); !status)
+        {
+            return status;
+        }
         for (const auto& key : pack_file_meta_.dir_entry_records | std::views::keys)
         {
             if (auto dir_name_opt = GetDirPathByDirId(key); dir_name_opt)
             {
-                if (dir_name_opt)
-                {
-                    dir_path_to_dir_id_[std::string(dir_name_opt.value())] = key;
-                }
+                dir_path_to_dir_id_[std::string(dir_name_opt.value())] = key;
             }
             else
             {

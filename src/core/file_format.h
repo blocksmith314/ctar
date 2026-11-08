@@ -155,7 +155,7 @@ namespace ctar
         /// requires bumping kFileFormatVersion.
         [[nodiscard]] size_t SerializedSize() const noexcept;
         void Serialize(std::string* dst) const;
-        void Deserialize(const char*& ptr);
+        Status Deserialize(const char*& ptr, const char* end);
 
         /// @brief Format  output stream
         /// @param os output stream
@@ -185,7 +185,7 @@ namespace ctar
         /// Serialized form: handle (16 bytes) followed by EntryMeta, 192 bytes in total.
         [[nodiscard]] size_t SerializedSize() const noexcept;
         void Serialize(std::string* dst) const;
-        void Deserialize(const char*& ptr);
+        Status Deserialize(const char*& ptr, const char* end);
     };
 
     struct FileStats
@@ -203,7 +203,7 @@ namespace ctar
         uint64_t file_meta_size = 0;
         PackFileHeader() = default;
         void Serialize(std::string* dst) const;
-        Status Deserialize(const char*& ptr);
+        Status Deserialize(const char*& ptr, const char* end);
         [[nodiscard]] size_t SerializedSize() const;
     };
 
@@ -224,7 +224,7 @@ namespace ctar
         void Clear();
         [[nodiscard]] size_t SerializedSize() const;
         void Serialize(std::string* dst) const;
-        void Deserialize(const char*& ptr);
+        Status Deserialize(const char*& ptr, const char* end);
     };
 
     class PackFileHandle
@@ -253,7 +253,7 @@ namespace ctar
         /// @brief Deserialize PackFileMeta from raw buffer, advance ptr on success
         /// @param[in,out] ptr input buffer pointer; advanced past metadata when return ok
         /// @return Status::Ok on success, error on corrupt / insufficient data
-        Status DeserializePackFileMeta(const char*& ptr);
+        Status DeserializePackFileMeta(const char*& ptr, const char* end);
 
         /// @brief Calculate total serialized byte size of PackFileMeta
         /// @return total bytes required for serialization
@@ -469,7 +469,7 @@ namespace ctar
         [[nodiscard]] size_t SerializedSize() const;
         friend class BlockStore;
         void Serialize(std::string* dst) const;
-        Status Deserialize(const char*& ptr);
+        Status Deserialize(const char*& ptr, const char* end);
         [[nodiscard]] std::string DebugString() const;
     };
 }; // namespace ctar

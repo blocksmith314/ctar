@@ -28,7 +28,7 @@ namespace ctar
         PackFileHeader deser_file_header{};
         const char* p = buf.data();
 
-        Status s = deser_file_header.Deserialize(p);
+        Status s = deser_file_header.Deserialize(p, buf.data() + buf.size());
         ASSERT_TRUE(s);
         ASSERT_EQ(deser_file_header.magic_number, kMagicNumber);
         ASSERT_EQ(deser_file_header.file_format_version.Encode(), kFileFormatVersion.Encode());
@@ -49,6 +49,7 @@ namespace ctar
         src.file_offsets = {0, 100, 200};
         src.file_hashes = {0x12, 0x34, 0x56};
         src.block_file_offset = 0;
+        src.payload_size = 350;
         src.block_size = 4096;
         std::string buf;
         src.Serialize(&buf);
@@ -58,7 +59,7 @@ namespace ctar
 
         DataBlockMeta dst;
         const char* p = buf.data();
-        auto status = dst.Deserialize(p);
+        auto status = dst.Deserialize(p, buf.data() + buf.size());
         ASSERT_TRUE(status);
         const size_t deserialize_bytes = p - buf.data();
         EXPECT_EQ(write_len, deserialize_bytes) << "Deserialization consumed different bytes, pointer drift!";
@@ -97,7 +98,7 @@ namespace ctar
         EXPECT_EQ(write_len, serialize_bytes);
         DataBlockMeta dst;
         const char* p = buf.data();
-        auto status = dst.Deserialize(p);
+        auto status = dst.Deserialize(p, buf.data() + buf.size());
         ASSERT_TRUE(status);
         const size_t deserialize_bytes = p - buf.data();
         EXPECT_EQ(write_len, deserialize_bytes);
@@ -127,6 +128,7 @@ namespace ctar
         src.file_offsets = {0};
         src.file_hashes = {0x8888};
         src.block_file_offset = 4096;
+        src.payload_size = 1024;
         src.block_size = 1024 * 1024;
         src.hash_value = 0x5555;
         std::string buf;
@@ -136,7 +138,7 @@ namespace ctar
         EXPECT_EQ(write_len, serialize_bytes);
         DataBlockMeta dst;
         const char* p = buf.data();
-        auto status = dst.Deserialize(p);
+        auto status = dst.Deserialize(p, buf.data() + buf.size());
         ASSERT_TRUE(status);
         const size_t deserialize_bytes = p - buf.data();
         EXPECT_EQ(write_len, deserialize_bytes);
@@ -195,7 +197,7 @@ namespace ctar
         // Deserialize
         PackFileMeta dst;
         const char* ptr = buffer.data();
-        dst.Deserialize(ptr);
+        ASSERT_TRUE(dst.Deserialize(ptr, buffer.data() + buffer.size()));
         const size_t consumed_bytes = ptr - buffer.data();
         EXPECT_EQ(write_len, consumed_bytes) << "Pointer drift detected, deserialization consumed wrong bytes";
 
@@ -229,7 +231,7 @@ namespace ctar
         EXPECT_EQ(write_len, calc_len);
         PackFileMeta dst;
         const char* ptr = buffer.data();
-        dst.Deserialize(ptr);
+        ASSERT_TRUE(dst.Deserialize(ptr, buffer.data() + buffer.size()));
         size_t consumed = ptr - buffer.data();
         EXPECT_EQ(write_len, consumed);
         EXPECT_TRUE(dst.dir_name_data.empty());
@@ -328,7 +330,7 @@ namespace ctar
         EXPECT_EQ(write_len, calc_len);
         PackFileMeta dst;
         const char* p = buf.data();
-        dst.Deserialize(p);
+        ASSERT_TRUE(dst.Deserialize(p, buf.data() + buf.size()));
         EXPECT_EQ(write_len, static_cast<size_t>(p - buf.data()));
 
         // check subdirectories
@@ -420,7 +422,7 @@ namespace ctar
         ASSERT_EQ(pack_file_handle.PackFileMetaSerializedSize(), buf.size());
         PackFileHandle dst;
         const char* p = buf.data();
-        status = dst.DeserializePackFileMeta(p);
+        status = dst.DeserializePackFileMeta(p, buf.data() + buf.size());
         ASSERT_TRUE(status);
         ASSERT_EQ(pack_file_handle.PackFileMetaSerializedSize(), dst.PackFileMetaSerializedSize());
     }
@@ -585,7 +587,7 @@ namespace ctar
 
         const char* ptr = buf.data();
         EntryMeta decoded{};
-        decoded.Deserialize(ptr);
+        ASSERT_TRUE(decoded.Deserialize(ptr, buf.data() + buf.size()));
         EXPECT_EQ(decoded.entry_type, meta.entry_type);
         EXPECT_EQ(decoded.permissions, meta.permissions);
         EXPECT_EQ(decoded.block_id, meta.block_id);
@@ -620,7 +622,7 @@ namespace ctar
 
         const char* ptr = buf.data();
         EntryRecord decoded{};
-        decoded.Deserialize(ptr);
+        ASSERT_TRUE(decoded.Deserialize(ptr, buf.data() + buf.size()));
         EXPECT_EQ(decoded.name_handle.offset, rec.name_handle.offset);
         EXPECT_EQ(decoded.name_handle.len, rec.name_handle.len);
         EXPECT_EQ(decoded.entry_meta.block_id, rec.entry_meta.block_id);

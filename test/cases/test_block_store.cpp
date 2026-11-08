@@ -1,5 +1,7 @@
 #include <csignal>
 #include <fstream>
+#include <iterator>
+#include <random>
 #include <gtest/gtest.h>
 #include <ranges>
 #include <string>
@@ -335,6 +337,148 @@ namespace ctar
         EXPECT_FALSE(Hash("hash_missing_file.bin"));
     }
 
+
+
+    namespace
+    {
+        std::string ReadWholeFile(const std::string& path)
+        {
+            std::ifstream in(path, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+
+        void WriteWholeFile(const std::string& path, const std::string& data)
+        {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out.write(data.data(), static_cast<std::streamsize>(data.size()));
+        }
+
+        uint64_t ReadU64At(const std::string& data, size_t offset)
+        {
+            uint64_t value = 0;
+            std::memcpy(&value, data.data() + offset, sizeof(value));
+            return value;
+        }
+
+        void WriteU64At(std::string& data, size_t offset, uint64_t value)
+        {
+            std::memcpy(data.data() + offset, &value, sizeof(value));
+        }
+
+        /// A tiny tree packed once, so each malformed-archive case only has to patch bytes.
+        struct MalformedArchiveFixture
+        {
+            fs::path root{"malformed_archive_test"};
+            fs::path source_dir{root / "source"};
+            fs::path archive{root / "source.ctar"};
+            fs::path out_dir{root / "out"};
+
+            void Create()
+            {
+                fs::remove_all(root);
+                fs::create_directories(source_dir / "sub");
+                std::ofstream(source_dir / "a.txt") << "hello";
+                std::ofstream(source_dir / "sub" / "b.bin") << "world";
+                BlockStore store;
+                ASSERT_TRUE(store.Scan(source_dir.string()));
+                ASSERT_TRUE(store.PackPipeline(archive.string()));
+            }
+
+            [[nodiscard]] std::string Bytes() const { return ReadWholeFile(archive.string()); }
+
+            Status Unpack(const std::string& bytes)
+            {
+                WriteWholeFile(archive.string(), bytes);
+                fs::remove_all(out_dir);
+                BlockStore store;
+                return store.UnPackPipeline(archive.string(), out_dir.string());
+            }
+
+            void Cleanup() const { fs::remove_all(root); }
+        };
+    } // namespace
+
+    TEST(MalformedArchive, CraftedMetadataIsRejected)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        const std::string good = fixture.Bytes();
+        ASSERT_GT(good.size(), 32U);
+
+        // header: magic(4) version(4) file_meta_size(8); the metadata starts at 16.
+        constexpr size_t kVersionOffset = 4;
+        constexpr size_t kMetaSizeOffset = 8;
+        const size_t dir_name_size_offset = sizeof(PackFileHeader) + 4 * sizeof(uint64_t);
+        const uint64_t dir_name_size = ReadU64At(good, dir_name_size_offset);
+        const size_t file_name_size_offset = dir_name_size_offset + sizeof(uint64_t) + dir_name_size;
+        const uint64_t file_name_size = ReadU64At(good, file_name_size_offset);
+        const size_t first_map_count_offset = file_name_size_offset + sizeof(uint64_t) + file_name_size;
+        ASSERT_LT(first_map_count_offset + sizeof(uint64_t), good.size());
+
+        const auto expect_rejected = [&](std::string bytes, std::string_view what)
+        {
+            const Status status = fixture.Unpack(bytes);
+            EXPECT_FALSE(status) << what << " should be rejected";
+            if (!status)
+            {
+                EXPECT_FALSE(status.error().message().empty()) << what;
+            }
+        };
+
+        {
+            std::string bytes = good;
+            WriteU64At(bytes, kMetaSizeOffset, 0x7FFFFFFFFFFFFFFFULL);
+            expect_rejected(bytes, "huge metadata size");
+        }
+        {
+            std::string bytes = good;
+            WriteU64At(bytes, kMetaSizeOffset, 0);
+            expect_rejected(bytes, "empty metadata size");
+        }
+        {
+            std::string bytes = good;
+            WriteU64At(bytes, first_map_count_offset, 1ULL << 40);
+            expect_rejected(bytes, "huge entry count");
+        }
+        {
+            std::string bytes = good;
+            const uint32_t newer_format = Version{2, 0, 0}.Encode();
+            std::memcpy(bytes.data() + kVersionOffset, &newer_format, sizeof(newer_format));
+            const Status status = fixture.Unpack(bytes);
+            ASSERT_FALSE(status);
+            EXPECT_NE(status.error().message().find("format"), std::string::npos) << status.error().message();
+        }
+        fixture.Cleanup();
+    }
+
+    TEST(MalformedArchive, SurvivesRandomMetadataMutations)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        const std::string good = fixture.Bytes();
+        const uint64_t meta_size = ReadU64At(good, 8);
+        const size_t meta_end = static_cast<size_t>(sizeof(PackFileHeader) + meta_size);
+        ASSERT_LT(meta_end, good.size());
+
+        std::mt19937 rng(20261108);
+        std::uniform_int_distribution<size_t> offset_dist(0, meta_end - 1);
+        for (int i = 0; i < 100; ++i)
+        {
+            std::string bytes = good;
+            const size_t offset = offset_dist(rng);
+            bytes[offset] = static_cast<char>(bytes[offset] ^ 0xFF);
+            try
+            {
+                const Status status = fixture.Unpack(bytes);
+                (void)status; // success or failure is fine; crashing is not
+            }
+            catch (const std::exception&)
+            {
+                // An exception escaping the library is acceptable: the CLI catches it.
+            }
+        }
+        fixture.Cleanup();
+    }
 
 } // namespace ctar
 
