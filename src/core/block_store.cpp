@@ -777,6 +777,17 @@ namespace ctar
         }
         auto& read_file = read_file_status.value();
         Status s;
+        const auto file_size_status = read_file->GetFileSize();
+        if (!file_size_status)
+        {
+            return error_io("fail to get the size of {}: {}", pack_file_path, file_size_status.error().message());
+        }
+        const uint64_t file_size = file_size_status.value();
+        if (file_size < sizeof(PackFileHeader))
+        {
+            return error_corruption("'{}' is too small to be a ctar archive", pack_file_path);
+        }
+
         std::string header(sizeof(PackFileHeader), '\0');
         size_t header_size = header.size();
         auto read_status = read_file->Read(header_size, header.data());
@@ -786,45 +797,70 @@ namespace ctar
         }
         const char* ptr = header.data();
         PackFileHeader file_header{};
-        s = file_header.Deserialize(ptr);
+        s = file_header.Deserialize(ptr, header.data() + header.size());
         if (!s)
         {
             return s;
         }
+        // The metadata region cannot be larger than the file itself; without this check a
+        // corrupt header makes the reader allocate and read an arbitrary size.
+        if (file_header.file_meta_size > file_size - sizeof(PackFileHeader))
+        {
+            return error_corruption("corrupt archive '{}': metadata size {} exceeds the file size {}", pack_file_path,
+                                    file_header.file_meta_size, file_size);
+        }
         meta_region_size_ = file_header.file_meta_size + sizeof(PackFileHeader);
-        std::string file_meta(file_header.file_meta_size, '\0');
+        std::string file_meta(static_cast<size_t>(file_header.file_meta_size), '\0');
         read_status =
             read_file->RandomRead(static_cast<off_t>(header_size), file_header.file_meta_size, file_meta.data());
         if (!read_status || read_status.value() != static_cast<size_t>(file_header.file_meta_size))
         {
             return error_io("fail to read data from {}: {}", pack_file_path, strerror(errno));
         }
-        ptr = file_meta.data();
-        s = pack_file_handle_.DeserializePackFileMeta(ptr);
+        const char* meta_ptr = file_meta.data();
+        const char* const meta_end = file_meta.data() + file_meta.size();
+        s = pack_file_handle_.DeserializePackFileMeta(meta_ptr, meta_end);
         if (!s)
         {
             return s;
         }
-        uint64_t data_block_count = DecodeFixed64(ptr);
-        ptr += sizeof(uint64_t);
-        data_block_metas_.resize(data_block_count);
-        for (size_t i = 0; i < data_block_count; ++i)
+
+        if (static_cast<size_t>(meta_end - meta_ptr) < sizeof(uint64_t))
         {
-            s = data_block_metas_[i].Deserialize(ptr);
-            if (s)
+            return error_corruption("corrupt archive '{}': missing data block count", pack_file_path);
+        }
+        const auto data_block_count = DecodeFixed64(meta_ptr);
+        meta_ptr += sizeof(uint64_t);
+        constexpr uint64_t kMinDataBlockMetaSize = 12 * sizeof(uint64_t);
+        if (data_block_count > static_cast<uint64_t>(meta_end - meta_ptr) / kMinDataBlockMetaSize)
+        {
+            return error_corruption("corrupt archive '{}': data block count {} is impossible", pack_file_path,
+                                    data_block_count);
+        }
+        data_block_metas_.clear();
+        data_block_metas_.resize(static_cast<size_t>(data_block_count));
+        const uint64_t block_region_size = file_size - meta_region_size_;
+        for (size_t i = 0; i < data_block_metas_.size(); ++i)
+        {
+            s = data_block_metas_[i].Deserialize(meta_ptr, meta_end);
+            if (!s)
             {
-                if (auto dir_path = pack_file_handle_.GetDirPathByDirId(data_block_metas_[i].dir_id))
-                {
-                    data_block_metas_[i].dir_stats.dir_path = dir_path.value();
-                }
-                else
-                {
-                    return error_io("fail to find the dir name of {}", data_block_metas_[i].dir_id);
-                }
+                return s;
+            }
+            const auto& block_meta = data_block_metas_[i];
+            if (block_meta.block_size > block_region_size ||
+                block_meta.block_file_offset > block_region_size - block_meta.block_size)
+            {
+                return error_corruption("corrupt archive '{}': data block {} lies outside the block region",
+                                        pack_file_path, block_meta.block_id);
+            }
+            if (auto dir_path = pack_file_handle_.GetDirPathByDirId(block_meta.dir_id))
+            {
+                data_block_metas_[i].dir_stats.dir_path = dir_path.value();
             }
             else
             {
-                return s;
+                return error_io("fail to find the dir name of {}", block_meta.dir_id);
             }
         }
         return {};
