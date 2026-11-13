@@ -135,6 +135,12 @@ namespace ctar
         std::optional<ErrorStatus> writer_error_;
         std::string packed_file_;
         std::string target_path_;
+
+        // Directories created by the current unpack run, deepest last. Used to
+        // restore an empty destination when extraction fails; only maintained when the
+        // destination already existed (otherwise the whole directory is removed).
+        std::vector<fs::path> created_dirs_;
+        bool track_created_dirs_ = false;
         CompressionConfig compression_config_;
         unsigned thread_cnt_ = 1;
 
@@ -202,15 +208,17 @@ namespace ctar
         /// Run the full packing pipeline: partition blocks, submit pack tasks,
         /// block until all tasks finish, and write the final pack archive.
         /// @param output_file Path of the generated pack file.
-        Status PackPipeline(const std::string& output_file);
+        /// @param force Replace the output file if it already exists.
+        Status PackPipeline(const std::string& output_file, bool force = false);
 
         /// Run the full unpacking pipeline: read pack file, restore blocks,
         /// submit unpack tasks, and block until all extraction completes.
         /// @param input_file Path to the source pack archive.
         /// @param output_dir Directory to restore extracted files.
-        Status UnPackPipeline(const std::string& input_file, const std::string& output_dir);
+        /// @param force Allow a non-empty output directory and replace its files.
+        Status UnPackPipeline(const std::string& input_file, const std::string& output_dir, bool force = false);
 
-        [[nodiscard]] Status CreateUnpackDir() const;
+        [[nodiscard]] Status CreateUnpackDir();
 
 
         /// @brief Render directory tree view and print to output stream

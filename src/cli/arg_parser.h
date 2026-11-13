@@ -60,6 +60,8 @@ namespace ctar::cli
         bool enable_tree_dir_only = false;
         bool enable_tree_stats = false;
         bool enable_dump_header = false;
+        // Allow replacing existing entries (unpack) or an existing archive (pack).
+        bool force = false;
 
         std::string input_data;
         bool enable_hash_file = false;

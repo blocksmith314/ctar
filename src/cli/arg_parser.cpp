@@ -66,6 +66,14 @@ COMMAND OPTIONS
                             much slower.
 
             If --compression is omitted, NUM is read as lz4 acceleration.
+
+        -f, --force
+            Overwrite the output archive if it already exists.
+
+    unpack:
+        -f, --force
+            Allow a non-empty output directory; existing files are replaced.
+
     ls:
         -h
             Print sizes in human-readable form (1024-based: K, M, G).
@@ -181,6 +189,11 @@ namespace ctar::cli
                 {
                     return error_invalid_arg("unsupported compression type '{}', available: lz4, lz4hc, none", ctype);
                 }
+                ++pos;
+            }
+            else if ((op == "-f" || op == "--force") && (subcommand_name == "pack" || subcommand_name == "unpack"))
+            {
+                opt.force = true;
                 ++pos;
             }
             else if (op == "-p" || op == "--param")
@@ -549,7 +562,7 @@ namespace ctar::cli
                 Status status = store.Scan(opt.source_path, opt.recursive);
                 if (status)
                 {
-                    status = store.PackPipeline(opt.output_path);
+                    status = store.PackPipeline(opt.output_path, opt.force);
                     if (!status)
                     {
                         return error_run_time("failed to pack directory '{}': {}", opt.source_path,
@@ -568,7 +581,7 @@ namespace ctar::cli
             break;
         case CommandType::UNPACK:
             {
-                if (Status status = store.UnPackPipeline(opt.source_path, opt.output_path); !status)
+                if (Status status = store.UnPackPipeline(opt.source_path, opt.output_path, opt.force); !status)
                 {
                     return error_run_time("failed to unpack archive '{}': {}", opt.source_path,
                                           status.error().message());

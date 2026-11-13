@@ -616,8 +616,13 @@ namespace ctar
         return {};
     }
 
-    Status BlockStore::PackPipeline(const std::string& output_pack_file)
+    Status BlockStore::PackPipeline(const std::string& output_pack_file, bool force)
     {
+        std::error_code exists_ec;
+        if (!force && fs::exists(output_pack_file, exists_ec))
+        {
+            return error_io("output archive '{}' already exists; pass --force to overwrite it", output_pack_file);
+        }
         auto write_file_status = NewPosixWriteFile(output_pack_file, true);
         if (!write_file_status)
         {
@@ -743,7 +748,109 @@ namespace ctar
         return {};
     }
 
-    Status BlockStore::CreateUnpackDir() const
+    namespace
+    {
+        /// True when the directory tree contains at least one entry that is not a
+        /// directory (regular file, symlink, ...). A destination holding only empty
+        /// directories counts as empty.
+        ResultStatus<bool> DirectoryContainsFiles(const fs::path& root)
+        {
+            std::error_code ec;
+            fs::recursive_directory_iterator it(root, ec);
+            if (ec)
+            {
+                return error_io("failed to read '{}': {}", root.string(), ec.message());
+            }
+            const fs::recursive_directory_iterator end;
+            while (it != end)
+            {
+                std::error_code status_ec;
+                const fs::file_status status = it->symlink_status(status_ec);
+                if (status_ec)
+                {
+                    return error_io("failed to stat '{}': {}", it->path().string(), status_ec.message());
+                }
+                if (!fs::is_directory(status))
+                {
+                    return true;
+                }
+                it.increment(ec);
+                if (ec)
+                {
+                    return error_io("failed to enumerate '{}': {}", root.string(), ec.message());
+                }
+            }
+            return false;
+        }
+
+        /// create_directories() that remembers which directories it actually created,
+        /// so a failed extraction can restore an empty destination exactly.
+        Status CreateDirectoriesTracked(const fs::path& path, std::vector<fs::path>& created)
+        {
+            std::vector<fs::path> missing;
+            for (fs::path p = path; !p.empty(); p = p.parent_path())
+            {
+                std::error_code ec;
+                if (fs::exists(p, ec))
+                {
+                    break;
+                }
+                missing.push_back(p);
+                if (p.parent_path() == p)
+                {
+                    break;
+                }
+            }
+            for (auto it = missing.rbegin(); it != missing.rend(); ++it)
+            {
+                std::error_code ec;
+                if (fs::create_directory(*it, ec))
+                {
+                    created.push_back(*it);
+                }
+                else if (ec && !fs::is_directory(*it))
+                {
+                    return error_io("failed to create dir {}: {}", it->string(), ec.message());
+                }
+            }
+            return {};
+        }
+
+        /// Undo the files and directories created by a failed extraction. Only valid
+        /// when the destination had no files before the run.
+        void CleanupExtraction(const fs::path& root, const std::vector<fs::path>& created_dirs, bool remove_root)
+        {
+            std::error_code ec;
+            if (remove_root)
+            {
+                fs::remove_all(root, ec);
+                return;
+            }
+            // Every file inside belongs to this attempt; remove them, then the
+            // directories this run created (deepest first). Directories that existed
+            // before the run stay where they are.
+            for (fs::recursive_directory_iterator it(root, ec), end; it != end; it.increment(ec))
+            {
+                if (ec)
+                {
+                    return;
+                }
+                std::error_code type_ec;
+                if (!it->is_directory(type_ec))
+                {
+                    std::error_code remove_ec;
+                    fs::remove(it->path(), remove_ec);
+                }
+            }
+            for (auto it = created_dirs.rbegin(); it != created_dirs.rend(); ++it)
+            {
+                std::error_code remove_ec;
+                fs::remove(*it, remove_ec);
+            }
+        }
+    } // namespace
+
+    Status BlockStore::CreateUnpackDir()
     {
         const fs::path out_root(target_path_);
         for (const auto& dir_map : pack_file_handle_.GetDirEntryRecords())
@@ -758,10 +865,20 @@ namespace ctar
             {
                 return std::unexpected(full_path.error());
             }
-            const fs::path& resolved = full_path.value();
-            if (auto success = fs::create_directories(resolved); !success && !fs::exists(resolved))
+            if (track_created_dirs_)
             {
-                return error_io("failed to create dir: {}", resolved.string());
+                if (auto status = CreateDirectoriesTracked(full_path.value(), created_dirs_); !status)
+                {
+                    return status;
+                }
+            }
+            else
+            {
+                std::error_code ec;
+                if (!fs::create_directories(full_path.value(), ec) && !fs::is_directory(full_path.value(), ec))
+                {
+                    return error_io("failed to create dir: {}", full_path.value().string());
+                }
             }
         }
         return {};
@@ -866,25 +983,51 @@ namespace ctar
         return {};
     }
 
-    Status BlockStore::UnPackPipeline(const std::string& input_file, const std::string& output_dir)
+    Status BlockStore::UnPackPipeline(const std::string& input_file, const std::string& output_dir, bool force)
     {
         Status status = RestoreBlocksFromPack(input_file);
         if (!status)
         {
             return status;
         }
+
+        const fs::path out_root(output_dir);
+        std::error_code ec;
+        const bool target_missing = !fs::exists(out_root, ec);
+        bool target_had_files = false;
+        if (!target_missing)
+        {
+            if (!fs::is_directory(out_root, ec))
+            {
+                return error_io("output path '{}' is not a directory", output_dir);
+            }
+            auto has_files = DirectoryContainsFiles(out_root);
+            if (!has_files)
+            {
+                return std::unexpected(has_files.error());
+            }
+            target_had_files = has_files.value();
+            if (target_had_files && !force)
+            {
+                return error_io("output directory '{}' is not empty; pass --force to overwrite it", output_dir);
+            }
+        }
+
+        created_dirs_.clear();
+        track_created_dirs_ = !target_missing;
         target_path_ = output_dir;
         status = CreateUnpackDir();
-        if (!status)
+        if (status)
         {
-            return status;
+            status = SubmitAndAwaitTasks(TaskOperation::Extract);
         }
-        status = SubmitAndAwaitTasks(TaskOperation::Extract);
-        if (!status)
+        if (!status && !target_had_files)
         {
-            return status;
+            // The destination had no files before this run, so everything inside it is
+            // ours: remove it and leave the destination the way we found it.
+            CleanupExtraction(out_root, created_dirs_, target_missing);
         }
-        return {};
+        return status;
     }
 
     uint64_t BlockStore::GetMetaSize() const

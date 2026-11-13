@@ -480,6 +480,145 @@ namespace ctar
         fixture.Cleanup();
     }
 
+
+    namespace
+    {
+        struct UnpackPolicyFixture
+        {
+            fs::path root{"unpack_policy_test"};
+            fs::path source_dir{root / "source"};
+            fs::path archive{root / "source.ctar"};
+            fs::path out_dir{root / "out"};
+
+            void Create()
+            {
+                fs::remove_all(root);
+                fs::create_directories(source_dir);
+                std::ofstream(source_dir / "a.txt") << "hello";
+                BlockStore store;
+                ASSERT_TRUE(store.Scan(source_dir.string()));
+                ASSERT_TRUE(store.PackPipeline(archive.string()));
+            }
+
+            [[nodiscard]] fs::path ExtractedFile() const
+            {
+                // The archive stores the path that was passed to Scan, relative to out_dir.
+                return out_dir / source_dir / "a.txt";
+            }
+
+            void Cleanup() const { fs::remove_all(root); }
+        };
+    } // namespace
+
+    TEST(UnpackPolicy, RefusesNonEmptyOutputWithoutForce)
+    {
+        UnpackPolicyFixture fixture;
+        fixture.Create();
+        fs::create_directories(fixture.out_dir);
+        std::ofstream(fixture.out_dir / "mine.txt") << "keep me";
+
+        {
+            BlockStore store;
+            const Status status = store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string());
+            EXPECT_FALSE(status);
+            if (!status)
+            {
+                EXPECT_NE(status.error().message().find("not empty"), std::string::npos);
+            }
+        }
+        EXPECT_TRUE(fs::exists(fixture.out_dir / "mine.txt"));
+        EXPECT_FALSE(fs::exists(fixture.ExtractedFile()));
+
+        // With --force the same destination is allowed, and a conflicting file is replaced.
+        fs::create_directories(fixture.ExtractedFile().parent_path());
+        std::ofstream(fixture.ExtractedFile()) << "old";
+        {
+            BlockStore store;
+            ASSERT_TRUE(store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string(), /*force=*/true));
+        }
+        EXPECT_TRUE(fs::exists(fixture.out_dir / "mine.txt"));
+        EXPECT_EQ(ReadWholeFile(fixture.ExtractedFile().string()), "hello");
+        fixture.Cleanup();
+    }
+
+    TEST(UnpackPolicy, AllowsEmptyOutputWithoutForce)
+    {
+        UnpackPolicyFixture fixture;
+        fixture.Create();
+        // Only empty directories: they do not count as content and must survive.
+        fs::create_directories(fixture.out_dir / "pre_existing_empty_dir");
+
+        {
+            BlockStore store;
+            ASSERT_TRUE(store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string()));
+        }
+        EXPECT_TRUE(fs::is_directory(fixture.out_dir / "pre_existing_empty_dir"));
+        EXPECT_EQ(ReadWholeFile(fixture.ExtractedFile().string()), "hello");
+        fixture.Cleanup();
+    }
+
+    TEST(UnpackPolicy, CleansUpAfterFailure)
+    {
+        UnpackPolicyFixture fixture;
+        fixture.Create();
+
+        // Corrupt the first payload byte so the per-file hash check fails.
+        std::string bytes = ReadWholeFile(fixture.archive.string());
+        const uint64_t meta_size = ReadU64At(bytes, 8);
+        const size_t payload_offset = sizeof(PackFileHeader) + static_cast<size_t>(meta_size);
+        ASSERT_LT(payload_offset, bytes.size());
+        bytes[payload_offset] = static_cast<char>(bytes[payload_offset] ^ 0xFF);
+        WriteWholeFile(fixture.archive.string(), bytes);
+
+        // (a) destination absent: stays absent
+        {
+            BlockStore store;
+            EXPECT_FALSE(store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string()));
+        }
+        EXPECT_FALSE(fs::exists(fixture.out_dir));
+
+        // (b) destination exists with an empty directory: the directory survives,
+        //     nothing else is left behind
+        fs::create_directories(fixture.out_dir / "pre_existing_empty_dir");
+        {
+            BlockStore store;
+            EXPECT_FALSE(store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string()));
+        }
+        EXPECT_TRUE(fs::is_directory(fixture.out_dir / "pre_existing_empty_dir"));
+        EXPECT_FALSE(fs::exists(fixture.out_dir / fixture.source_dir));
+        EXPECT_FALSE(fs::exists(fixture.ExtractedFile()));
+        fixture.Cleanup();
+    }
+
+    TEST(PackPolicy, RefusesToOverwriteArchiveWithoutForce)
+    {
+        UnpackPolicyFixture fixture;
+        fs::remove_all(fixture.root);
+        fs::create_directories(fixture.source_dir);
+        std::ofstream(fixture.source_dir / "a.txt") << "hello";
+        std::ofstream(fixture.archive) << "old archive";
+
+        {
+            BlockStore store;
+            ASSERT_TRUE(store.Scan(fixture.source_dir.string()));
+            const Status status = store.PackPipeline(fixture.archive.string());
+            EXPECT_FALSE(status);
+            if (!status)
+            {
+                EXPECT_NE(status.error().message().find("already exists"), std::string::npos);
+            }
+        }
+        EXPECT_EQ(ReadWholeFile(fixture.archive.string()), "old archive");
+
+        {
+            BlockStore store;
+            ASSERT_TRUE(store.Scan(fixture.source_dir.string()));
+            ASSERT_TRUE(store.PackPipeline(fixture.archive.string(), /*force=*/true));
+        }
+        EXPECT_GT(ReadWholeFile(fixture.archive.string()).size(), 16U);
+        fixture.Cleanup();
+    }
+
 } // namespace ctar
 
 int main(int argc, char** argv)
