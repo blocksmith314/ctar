@@ -68,8 +68,13 @@ namespace ctar
     // XXH64(nullptr, 0, kHashSeed);
     constexpr uint64_t kZeroXXHash = 0xe80e0f7d067306bbULL;
 
-    // Maximum entries for one batch write
-    constexpr size_t kMaxBatchWriteEntries = 4;
+    // Maximum blocks for one batch write. The writer holds one buffer per block in
+    // the batch, so this matches kBlockBufferCount below.
+    constexpr size_t kMaxBatchWriteEntries = 32;
+
+    // Maximum payload bytes for one batch write. Small blocks are batched into one
+    // pwritev; a single block larger than this is written on its own.
+    constexpr size_t kMaxBatchWriteBytes = 128UL * unit::MiB;
 
     // Default buffer size for holding all file/directory path name.
     constexpr size_t kEntryNameBufferSize = 1 * unit::MiB;

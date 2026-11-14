@@ -250,7 +250,20 @@ namespace ctar
             while (pos < total)
             {
                 std::vector<std::unique_ptr<BlockBuffer>> return_buffers;
-                size_t batch_end = std::min(pos + kMaxBatchWriteEntries, total);
+                // Batch by entry count and payload bytes: many small blocks share one
+                // pwritev, while one large block stays on its own.
+                size_t batch_end = pos;
+                size_t batch_bytes = 0;
+                while (batch_end < total && batch_end - pos < kMaxBatchWriteEntries)
+                {
+                    const uint64_t block_len = data_block_metas_[all_write_tasks[batch_end].block_id].block_size;
+                    if (batch_end > pos && batch_bytes + block_len > kMaxBatchWriteBytes)
+                    {
+                        break;
+                    }
+                    batch_bytes += block_len;
+                    ++batch_end;
+                }
                 const size_t batch_cnt = batch_end - pos;
                 std::vector<iovec> iovs;
                 iovs.reserve(batch_cnt);
@@ -393,7 +406,10 @@ namespace ctar
         }
 
         block_meta.payload_size = payload_offset;
-        block_meta.block_size = next_4k_align(payload_offset);
+        // Blocks are written back to back; only the start of the block region is
+        // 4K-aligned. Padding every block to 4K wasted up to 4 KiB per block and made
+        // the writer submit bytes that were never part of the payload.
+        block_meta.block_size = payload_offset;
         if (!EnqueueBlockBuffer(block_meta.block_id, std::move(compress_buffer)))
         {
             return error_run_time("pack writer stopped before task {} was queued", block_meta.block_id);
@@ -537,8 +553,9 @@ namespace ctar
                 block_meta.file_offsets.resize(block_meta.file_ids.size());
                 block_meta.block_size = accumulated_bytes;
                 block_meta.block_file_offset = 0;
-                // use for set the original size of pack file
-                max_block_region_size_ += next_4k_align(block_meta.block_size);
+                // Upper bound of the block region: compression never expands a block,
+                // so the uncompressed size is the worst case.
+                max_block_region_size_ += block_meta.block_size;
                 pos = end_pos;
             }
         }
@@ -638,9 +655,9 @@ namespace ctar
         packed_file_ = output_pack_file;
         auto raw_meta_size = GetMetaSize();
         meta_region_size_ = next_4k_align(raw_meta_size);
-        if (!write_file->TruncFile(static_cast<off_t>(meta_region_size_ + max_block_region_size_)))
+        if (!write_file->Preallocate(static_cast<size_t>(meta_region_size_ + max_block_region_size_)))
         {
-            return error_io("fail to truncate compressed file {}: {}", output_pack_file, strerror(errno));
+            return error_io("fail to preallocate compressed file {}: {}", output_pack_file, strerror(errno));
         }
         {
             available_block_buffers_.clear();

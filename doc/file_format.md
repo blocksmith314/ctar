@@ -9,10 +9,10 @@
 [data block meta 2]
 ...
 [data block meta n]
-[data block 1][padding]
-[data block 2][padding]
+[data block 1]
+[data block 2]
 ...
-[data block n][padding]
+[data block n]
 [magic_number]
 <end_of_file>
 ```
@@ -52,7 +52,7 @@
 - total_file_count: the number of files contained in this pack file
 - total_original_size: the sum of the original sizes of all files in this pack file
 - total_compressed_size: the sum of the compressed sizes of all files in this pack file
-- padding_size: for performance reasons, every data block is 4K-aligned; this is the number of padding bytes that alignment introduces
+- padding_size: number of padding bytes in the data block region (block region size minus `total_compressed_size`). Archives written by this version store blocks back to back, so this is 0; older archives may report their per-block alignment padding
 - dir_name_data: stores all directory names
 - file_name_data: stores all file names
 - dir_id_to_child_dir_ids: records all child directory ids under each directory id
@@ -93,8 +93,8 @@ file_hashes
 - block_id: the sequence number of the data block, starting from 1
 - dir_id: the id of the directory that owns the files stored in this data block; a single data block holds the files of at most one directory, but the files of one directory may be spread across multiple data blocks
 - block_file_offset: the offset of the data block relative to the end of the metadata region (that is, the start of the data block region); adding the length of the metadata region (`header` size + `file_meta_size`) yields the absolute offset of this data block within the pack file
-- payload_size: the size of the valid data stored in the data block, i.e. excluding padding bytes
-- block_size: the size of the data block, including the padding bytes introduced by alignment
+- payload_size: the size of the valid data stored in the data block
+- block_size: the size of the data block as stored in the file (compressed when compression is enabled); it equals `payload_size`. Blocks are stored back to back; only the start of the data block region is 4K-aligned
 - hash_value: the hash of the data block; this value is not computed at present
 - file_ids: the file ids of the files stored in this data block; file_id is the unique identifier of every file under the packed directory tree
 - file_orig_sizes: the original sizes of the files in this data block
@@ -111,13 +111,12 @@ file_hashes
 [data_of_file_2(may compressed)]
 ...
 [data_of_file_n(may compressed)]
-[padding]
 <end_of_data_block>
 ```
 
 - Consumers may decide for themselves whether to compress files. By default `lz4` is used, but already-compressed formats such as `jpeg`, `png`, and `parquet` are excluded; in that case the corresponding compression type is `none`
 - Every data block has a corresponding data block meta. The data block meta records the offset of each packed file within the data block, so consumers can read a single file or a batch of files depending on the use case
-- padding ensures that every data block is 4K-aligned
+- blocks are stored back to back; only the start of the data block region is 4K-aligned, so a block needs no trailing padding
 
 ## magic_number
 

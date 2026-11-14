@@ -297,7 +297,7 @@ namespace ctar
         ///         - total_file_count: number of stored files
         ///         - total_original_size: original uncompressed total size
         ///         - total_compressed_size: compressed payload total size
-        ///         - padding_size: alignment padding bytes
+        ///         - padding_size: block-region padding bytes (0 for archives without per-block padding)
         [[nodiscard]] FileStats GetFileStats() const
         {
             return {pack_file_meta_.total_file_count, pack_file_meta_.total_original_size,
@@ -437,7 +437,9 @@ namespace ctar
         uint64_t block_file_offset = 0;
         // Size of block (without padding). If compression is enabled, this is the compressed size.
         uint64_t payload_size = 0;
-        // Size of block with padding
+        // Size of the block payload in the file (compressed when compression is
+        // enabled). Blocks are stored back to back; only the block region start is
+        // 4K-aligned, so this needs no per-block padding.
         uint64_t block_size = 0;
         // xxhash of data block file, not calculate at this version
         uint64_t hash_value = 0;

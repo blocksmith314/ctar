@@ -619,6 +619,30 @@ namespace ctar
         fixture.Cleanup();
     }
 
+
+    TEST(PackLayout, BlocksAreNotPadded)
+    {
+        const fs::path root("pack_layout_test");
+        const fs::path tree = root / "tree";
+        fs::remove_all(root);
+        for (int i = 0; i < 200; ++i)
+        {
+            const fs::path dir = tree / ("d" + std::to_string(i));
+            fs::create_directories(dir);
+            std::ofstream(dir / "f.txt") << "x";
+        }
+        const fs::path archive = root / "tree.ctar";
+        {
+            BlockStore store;
+            ASSERT_TRUE(store.Scan(tree.string()));
+            ASSERT_TRUE(store.PackPipeline(archive.string()));
+        }
+        // 200 blocks with a 1-byte payload. Padding every block to 4 KiB would add
+        // ~800 KiB; the metadata itself is only ~124 KiB.
+        EXPECT_LT(fs::file_size(archive), 200 * 1024);
+        fs::remove_all(root);
+    }
+
 } // namespace ctar
 
 int main(int argc, char** argv)
