@@ -1,3 +1,4 @@
+#include <cstring>
 #include <expected>
 #include <fstream>
 #include <grp.h>
@@ -314,7 +315,10 @@ namespace ctar
         }
         auto compress_buffer_size =
             compress::MaxCompressBufferSize(compression_config_.compression_type, block_meta.block_size);
-        compress_buffer->EnsureCapacity(static_cast<size_t>(compress_buffer_size));
+        // Reserve room for the 4K-aligned form of the largest possible payload, so
+        // growing for the alignment padding later cannot invalidate the compressed
+        // bytes. RawBuffer::EnsureCapacity reallocates without preserving contents.
+        compress_buffer->EnsureCapacity(static_cast<size_t>(next_4k_align(compress_buffer_size)));
 
         uint64_t payload_offset = 0;
         size_t file_count = block_meta.file_ids.size();
@@ -394,6 +398,16 @@ namespace ctar
 
         block_meta.payload_size = payload_offset;
         block_meta.block_size = next_4k_align(payload_offset);
+        // The writer submits block_size bytes from this buffer, so the alignment
+        // padding has to be inside the allocation and defined: grow the buffer and
+        // zero the tail. Reading past the compressed payload was an out-of-bounds
+        // read, and uninitialised padding both leaked heap contents into the
+        // archive and made the output non-deterministic.
+        if (block_meta.block_size > payload_offset)
+        {
+            std::memset(compress_buffer->Data() + payload_offset, 0,
+                        static_cast<size_t>(block_meta.block_size - payload_offset));
+        }
         if (!EnqueueBlockBuffer(block_meta.block_id, std::move(compress_buffer)))
         {
             return error_run_time("pack writer stopped before task {} was queued", block_meta.block_id);
