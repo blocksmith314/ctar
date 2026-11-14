@@ -830,72 +830,27 @@ namespace
 
     [[nodiscard]] size_t PackFileHandle::PackFileMetaSerializedSize() const { return pack_file_meta_.SerializedSize(); }
 
-    namespace
-    {
-        /// Kind of a directory entry, decided once per entry so that sorting, the
-        /// recursion and ProcessDirEntry all agree on it.
-        enum class ScanKind : uint8_t
-        {
-            kSkip,
-            kRegular,
-            kDirectory,
-        };
-
-        /// Classify an entry without following symlinks and without throwing.
-        /// Anything that is neither a regular file nor a directory -- symlink, FIFO,
-        /// unix socket, device node, or an entry whose status cannot be read -- is
-        /// skipped instead of being treated as a directory.
-        ScanKind ClassifyEntry(const fs::directory_entry& entry) noexcept
-        {
-            std::error_code ec;
-            if (entry.is_symlink(ec))
-            {
-                return ScanKind::kSkip;
-            }
-            if (entry.is_regular_file(ec))
-            {
-                return ScanKind::kRegular;
-            }
-            if (entry.is_directory(ec))
-            {
-                return ScanKind::kDirectory;
-            }
-            return ScanKind::kSkip;
-        }
-    } // namespace
-
-    std::expected<EntryMeta, ErrorStatus> PackFileHandle::ProcessDirEntry(const fs::directory_entry& entry,
-                                                                          const EntryType entry_type)
+    std::expected<EntryMeta, ErrorStatus> PackFileHandle::ProcessDirEntry(const fs::path& path,
+                                                                          const EntryType entry_type,
+                                                                          const struct stat& file_stat)
     {
         EntryMeta file_meta{};
         file_meta.entry_type = entry_type;
 
-        std::error_code ec;
         if (entry_type == EntryType::REGULAR)
         {
-            const uint64_t file_size = fs::file_size(entry.path(), ec);
-            if (ec)
-            {
-                return error_io("fail to get the size of {}: {}", entry.path().c_str(), ec.message());
-            }
+            const uint64_t file_size = static_cast<uint64_t>(file_stat.st_size);
             file_meta.file_orig_size = file_size;
             pack_file_meta_.total_original_size += file_size;
             pack_file_meta_.total_file_count += 1;
         }
 
-        const auto ftime = fs::last_write_time(entry.path(), ec);
-        if (ec)
-        {
-            return error_io("fail to get the modification time of {}: {}", entry.path().c_str(), ec.message());
-        }
-        const auto sys_tp = std::chrono::file_clock::to_sys(ftime);
-        file_meta.modify_time =
-            std::chrono::duration_cast<std::chrono::milliseconds>(sys_tp.time_since_epoch()).count();
-        struct stat file_stat{};
-        if (::stat(entry.path().c_str(), &file_stat) != 0)
-        {
-            return error_io("fail to get stat of {}: {}", entry.path().c_str(), strerror(errno));
-        }
+#if defined(__APPLE__)
+        const struct timespec mtime = file_stat.st_mtimespec;
+#else
+        const struct timespec mtime = file_stat.st_mtim;
+#endif
+        file_meta.modify_time = static_cast<long long>(mtime.tv_sec) * 1000 + mtime.tv_nsec / 1000000;
         file_meta.permissions = static_cast<uint32_t>(file_stat.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO));
         if (passwd* pw = getpwuid(file_stat.st_uid); pw != nullptr)
         {
@@ -904,7 +859,7 @@ namespace
         else
         {
             std::snprintf(file_meta.owner_name, std::size(file_meta.owner_name), "%s", "unknown");
-            std::println(std::cerr, "failed to get uid of file {}, will use unknown instead", entry.path().c_str());
+            std::println(std::cerr, "failed to get uid of file {}, will use unknown instead", path.c_str());
         }
         if (const group* gr = getgrgid(file_stat.st_gid); gr != nullptr)
         {
@@ -913,8 +868,7 @@ namespace
         else
         {
             std::snprintf(file_meta.group_name, std::size(file_meta.group_name), "%s", "unknown");
-            std::println(std::cerr, "failed to get group_name of file {}, will use unknown instead",
-                         entry.path().c_str());
+            std::println(std::cerr, "failed to get group_name of file {}, will use unknown instead", path.c_str());
         }
         file_meta.block_id = 0;
         file_meta.offset = 0;
@@ -942,9 +896,10 @@ namespace
 
         struct ScanEntry
         {
-            fs::directory_entry entry;
+            fs::path path;
             EntryType type;
             std::string name;
+            struct stat file_stat;
         };
 
         AddDir(dir_id_, root_path);
@@ -955,12 +910,25 @@ namespace
         while (it != end)
         {
             const fs::directory_entry& e = *it;
-            const ScanKind kind = (filter_junk && is_skip_entry(e)) ? ScanKind::kSkip : ClassifyEntry(e);
-            if (kind != ScanKind::kSkip)
+            bool take = false;
+            EntryType type = EntryType::REGULAR;
+            struct stat file_stat{};
+            if (!(filter_junk && is_skip_entry(e)) && ::lstat(e.path().c_str(), &file_stat) == 0)
             {
-                entries.push_back({e,
-                                   kind == ScanKind::kDirectory ? EntryType::DIRECTORY : EntryType::REGULAR,
-                                   e.path().filename().string()});
+                if (S_ISDIR(file_stat.st_mode))
+                {
+                    type = EntryType::DIRECTORY;
+                    take = true;
+                }
+                else if (S_ISREG(file_stat.st_mode))
+                {
+                    type = EntryType::REGULAR;
+                    take = true;
+                }
+            }
+            if (take)
+            {
+                entries.push_back({e.path(), type, e.path().filename().string(), file_stat});
             }
             it.increment(ec);
             if (ec)
@@ -985,10 +953,8 @@ namespace
 
         for (const auto& s : entries)
         {
-            // A reference into the entry's own path: the entries vector outlives this
-            // loop, so no copy (and no view of a temporary) is needed here.
-            const std::string& entry_path = s.entry.path().native();
-            auto result = ProcessDirEntry(s.entry, s.type);
+            const std::string& entry_path = s.path.native();
+            auto result = ProcessDirEntry(s.path, s.type, s.file_stat);
             if (!result)
             {
                 return std::unexpected(result.error());
