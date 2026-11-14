@@ -54,6 +54,11 @@ namespace ctar
         virtual Status RandomWriteV(const struct iovec* iov, int iov_cnt, uint64_t offset) = 0;
         virtual Status Sync() = 0;
         virtual Status TruncFile(size_t target_file_size) = 0;
+
+        /// Reserve space for @p target_file_size bytes and make the file that large,
+        /// so the write path does not allocate blocks during writeback. Falls back to
+        /// ftruncate() when the filesystem does not support preallocation.
+        virtual Status Preallocate(size_t target_file_size) = 0;
     };
 
     ResultStatus<std::unique_ptr<ReadFile>> NewPosixReadFile(const std::string& file_name);

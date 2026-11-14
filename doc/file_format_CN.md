@@ -9,10 +9,10 @@
 [data block meta 2]
 ...
 [data block meta n]
-[data block 1][padding]
-[data block 2][padding]
+[data block 1]
+[data block 2]
 ...
-[data block n][padding]
+[data block n]
 [magic_number]
 <end_of_file>
 ```
@@ -52,7 +52,7 @@
 - total_file_count: 该打包文件包含的文件数
 - total_original_size: 该打包文件所有文件的原始大小之和
 - total_compressed_size: 该打包文件所有文件压缩后的大小之和
-- padding_size: 出于性能考虑，每个 data block 都是 4k 对齐的，这里是对齐带来的 padding 字节数
+- padding_size: data block 区域中 padding 的字节数（块区域大小减去 `total_compressed_size`）。当前版本写出的归档中块与块连续存放，因此为 0；旧归档可能包含逐块对齐 padding
 - dir_name_data: 保存了所有的文件夹名称
 - file_name_data: 保存了所有的文件名称
 - dir_id_to_child_dir_ids: 记录每个文件夹 id 下的所有文件夹 id
@@ -94,8 +94,8 @@ file_hashes
 - dir_id: `data_block` 保存的文件所属的文件夹id, 每个 `data_block` 至多保存一个文件夹的文件，但一个文件夹下的文件可能保存在多个
   `data_block` 中
 - block_file_offset: `data_block` 相对于元数据区末尾（即数据块区起点）的偏移量；加上元数据区长度（`header` 长度 + `file_meta_size`）即为该 `data_block` 在打包文件中的绝对偏移量
-- payload_size: `data_block` 保存的有效数据的大小，即不包含 padding 字符数
-- block_size: `data_block` 的大小，包含由于对齐产生的 padding 字符数
+- payload_size: `data_block` 保存的有效数据的大小
+- block_size: `data_block` 在文件中实际存储的字节数（启用压缩时为压缩后大小），等于 `payload_size`。块与块连续存放，只有 data block 区域起点是 4K 对齐的
 - hash_value: `data_block` 的 hash 值，当前该值未计算
 - file_ids: `data_block` 保存的文件对应的文件 id, `file_id` 为整个被打包文件夹下所有文件的唯一标识
 - file_orig_sizes: `data_block` 下的文件对应的原始文件大小
@@ -112,14 +112,13 @@ file_hashes
 [data_of_file_2(may compressed)]
 ...
 [data_of_file_n(may compressed)]
-[padding]
 <end_of_data_block>
 ```
 
 - 使用者可以自行决定是否对文件进行压缩，默认情况下会用 `lz4` 进行压缩，但会排除 `jpeg`、`png`、`parquet` 等已经压缩过的文件，此时对应的压缩类型为 `none`
 - 每个 `data block` 都有对应的 `data block meta`, `data block meta` 中记录了每个被打包文件在 `data block`
   中的偏移量，使用者可以根据使用场景进行单个文件的读取或者批量读取
-- padding 保证每个 `data block` 是 4k 对齐的
+- 块与块连续存放，只有 data block 区域起点是 4K 对齐的，因此块本身不需要尾部 padding
 
 ## magic_number
 

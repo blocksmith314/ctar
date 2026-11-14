@@ -429,6 +429,45 @@ namespace ctar
             }
             return {};
         }
+
+        Status Preallocate(size_t target_file_size) override
+        {
+#if defined(__linux__)
+            if (::fallocate(fd_guard_.fd, 0, 0, static_cast<off_t>(target_file_size)) == 0)
+            {
+                return {};
+            }
+            if (errno != EOPNOTSUPP && errno != EINVAL && errno != ENOSYS)
+            {
+                return error_io("fail to preallocate {}: {}", file_name_, strerror(errno));
+            }
+#elif defined(__APPLE__)
+            fstore_t store{};
+            store.fst_flags = 0;
+            store.fst_posmode = F_PEOFPOSMODE;
+            store.fst_offset = 0;
+            store.fst_length = static_cast<off_t>(target_file_size);
+            if (::fcntl(fd_guard_.fd, F_PREALLOCATE, &store) >= 0)
+            {
+                if (::ftruncate(fd_guard_.fd, static_cast<off_t>(target_file_size)) < 0)
+                {
+                    return error_io("fail to size {}: {}", file_name_, strerror(errno));
+                }
+                return {};
+            }
+            if (errno != EOPNOTSUPP && errno != EINVAL && errno != ENOSYS)
+            {
+                return error_io("fail to preallocate {}: {}", file_name_, strerror(errno));
+            }
+#endif
+            // The filesystem has no preallocation support: at least size the file so
+            // the writer never has to extend it.
+            if (::ftruncate(fd_guard_.fd, static_cast<off_t>(target_file_size)) < 0)
+            {
+                return error_io("fail to truncate {}: {}", file_name_, strerror(errno));
+            }
+            return {};
+        }
     };
 
     ResultStatus<std::unique_ptr<ReadFile>> NewPosixReadFile(const std::string& file_name)
