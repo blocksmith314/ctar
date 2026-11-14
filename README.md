@@ -298,6 +298,20 @@ cmake --install . # --prefix ./user_defined_install_path
 **Not supported**: Windows, Intel Macs, arm64 Linux, systems with glibc older than 2.28 (such as CentOS 7), and
 musl-based distributions such as Alpine.
 
+### Sanitizer build
+
+`BUILD_ASAN=ON` instruments the library, the CLI and the tests with AddressSanitizer and UBSan, and turns
+undefined behaviour into a hard failure (`-fno-sanitize-recover=undefined`):
+
+```shell
+cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_ASAN=ON
+cmake --build build-asan
+(cd build-asan && ctest --output-on-failure)
+```
+
+GCC and Clang (including AppleClang) are supported. Do not use it for release builds; the CI job
+`Linux / GCC 14 (ASan + UBSan)` runs this configuration on every pull request.
+
 ## License
 
 `ctar` is released under the Apache License (Version 2.0). Some of the third-party components included in `ctar` may

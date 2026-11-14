@@ -284,6 +284,20 @@ cmake --install . # --prefix ./user_defined_install_path
 
 **暂不支持**：Windows、Intel Mac、arm64 Linux、glibc 低于 2.28 的系统（如 CentOS 7），以及使用 musl 的系统（如 Alpine）。
 
+### Sanitizer 构建
+
+`BUILD_ASAN=ON` 会为库、CLI 和测试启用 AddressSanitizer 与 UBSan，并把未定义行为当作硬失败
+（`-fno-sanitize-recover=undefined`）：
+
+```shell
+cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_ASAN=ON
+cmake --build build-asan
+(cd build-asan && ctest --output-on-failure)
+```
+
+支持 GCC 和 Clang（含 AppleClang）。不要用于发布构建；CI 在每个 PR 上运行同样的配置
+（`Linux / GCC 14 (ASan + UBSan)`）。
+
 ## License
 
 `ctar` 遵循 Apache License (Version 2.0) 开源许可证。`ctar` 包含的部分第三方组件可能遵循其它开源许可证。相关详细信息可以查看 NOTICE 文件。

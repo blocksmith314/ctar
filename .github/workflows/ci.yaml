@@ -117,3 +117,53 @@ jobs:
         if: failure()
         working-directory: build
         run: cat Testing/Temporary/LastTest.log
+  sanitizers:
+    name: Linux / GCC 14 (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-14 g++-14 libstdc++-14-dev
+
+      - name: Cache third-party sources
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: third-party-ubuntu-24.04-gcc-14-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_C_COMPILER=gcc-14
+          -DCMAKE_CXX_COMPILER=g++-14
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBUILD_TEST=ON
+          -DBUILD_BENCHMARKS=OFF
+          -DBUILD_ASAN=ON
+
+      - name: Build
+        run: cmake --build build
+
+      # A silent no-op (wrong compiler id, flags dropped) would make the job
+      # pointless, so assert that the binaries really are instrumented.
+      - name: Verify instrumentation
+        run: |
+          if ! nm -C build/test_block_store | grep -q '__asan'; then
+            echo "::error::test binaries are not instrumented; BUILD_ASAN did not take effect"
+            exit 1
+          fi
+
+      - name: Test
+        working-directory: build
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --output-on-failure
+
+      - name: Dump ctest log on failure
+        if: failure()
+        working-directory: build
+        run: cat Testing/Temporary/LastTest.log

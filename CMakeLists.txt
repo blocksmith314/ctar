@@ -17,7 +17,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(BUILD_CLI "Build command‑line executable" ON)
 option(BUILD_TEST "Build unit tests" ON)
 option(BUILD_BENCHMARKS "Enable benchmarks" OFF)
-option(BUILD_ASAN "Enable AddressSanitizer + UBSan for tests only" OFF)
+option(BUILD_ASAN "Enable AddressSanitizer + UBSan for the whole build" OFF)
 
 find_package(PkgConfig QUIET)
 # std::thread is used by the thread pool. On glibc < 2.34 the pthread symbols
@@ -60,15 +60,17 @@ else ()
     set(PROJECT_WARNING_FLAGS -Wall -Wextra -Wpedantic)
 endif()
 
-add_library(test_sanitizer_flags INTERFACE)
-if (BUILD_ASAN AND (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
-    target_compile_options(test_sanitizer_flags INTERFACE
-            -fsanitize=address,undefined
-            -fno-omit-frame-pointer
-    )
-    target_link_options(test_sanitizer_flags INTERFACE
-            -fsanitize=address,undefined
-    )
+# AddressSanitizer + UBSan for the whole build: test-only flags would leave the
+# library objects uninstrumented, so an out-of-bounds access inside the library
+# would go unnoticed. Opt-in, and used by the dedicated CI job.
+if (BUILD_ASAN)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        message(STATUS "==== AddressSanitizer + UBSan enabled ====")
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
+        add_link_options(-fsanitize=address,undefined)
+    else ()
+        message(WARNING "BUILD_ASAN supports GCC and Clang only (compiler: ${CMAKE_CXX_COMPILER_ID})")
+    endif ()
 endif ()
 
 # ========= Core Library =========
@@ -197,7 +199,6 @@ if (BUILD_TEST)
                 PRIVATE
                 ${BASE_TEST_LIBS}
                 test_warning_fix
-                test_sanitizer_flags
         )
         target_include_directories(${TEST_NAME} PRIVATE
                 $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>
