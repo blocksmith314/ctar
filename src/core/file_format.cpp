@@ -886,8 +886,16 @@ namespace
         {
             fs::path path;
             EntryType type;
-            std::string name;
+            // Offset of the file name in path.native(); avoids storing a second
+            // string per entry. AddFile() copies the name immediately, so a view
+            // into the path is enough.
+            size_t name_offset;
             struct stat file_stat;
+
+            [[nodiscard]] std::string_view name() const
+            {
+                return std::string_view(path.native()).substr(name_offset);
+            }
         };
 
         // Children of this directory all have this id as their parent; no need to
@@ -919,7 +927,9 @@ namespace
             }
             if (take)
             {
-                entries.push_back({e.path(), type, e.path().filename().string(), file_stat});
+                const std::string& native = e.path().native();
+                const size_t sep = native.find_last_of('/');
+                entries.push_back({e.path(), type, sep == std::string::npos ? 0 : sep + 1, file_stat});
             }
             it.increment(ec);
             if (ec)
@@ -939,7 +949,7 @@ namespace
                               {
                                   return a_dir;
                               }
-                              return a.name < b.name;
+                              return a.name() < b.name();
                           });
 
         for (const auto& s : entries)
@@ -966,7 +976,7 @@ namespace
             }
             else
             {
-                AddFile(file_id_, s.name, parent_dir_id, meta);
+                AddFile(file_id_, s.name(), parent_dir_id, meta);
                 file_id_++;
             }
         }
