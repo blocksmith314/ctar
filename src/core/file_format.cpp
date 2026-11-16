@@ -767,18 +767,6 @@ namespace
     }
 
 
-    ResultStatus<entry_id_t> PackFileHandle::GetParentDirIdByPath(std::string_view entry_path)
-    {
-        std::filesystem::path path(entry_path);
-        const auto parent_path = path.parent_path().string();
-        auto it = dir_path_to_dir_id_.find(parent_path);
-        if (it != dir_path_to_dir_id_.end())
-        {
-            return it->second;
-        }
-        return error_not_found("not found file id of dir: {}", entry_path);
-    }
-
     const std::vector<entry_id_t>& PackFileHandle::GetChildDirIdsByDirId(entry_id_t parent_dir_id) const
     {
         const auto it = pack_file_meta_.dir_id_to_child_dir_ids.find(parent_dir_id);
@@ -902,6 +890,9 @@ namespace
             struct stat file_stat;
         };
 
+        // Children of this directory all have this id as their parent; no need to
+        // resolve it again from the full path for every entry.
+        const entry_id_t current_dir_id = dir_id_;
         AddDir(dir_id_, root_path);
         dir_id_++;
 
@@ -961,12 +952,7 @@ namespace
             }
             const EntryMeta& meta = result.value();
 
-            auto get_status = GetParentDirIdByPath(entry_path);
-            if (!get_status)
-            {
-                return std::unexpected(get_status.error());
-            }
-            const entry_id_t parent_dir_id = get_status.value();
+            const entry_id_t parent_dir_id = current_dir_id;
             if (s.type == EntryType::DIRECTORY)
             {
                 AddDir(dir_id_, entry_path, parent_dir_id, meta);

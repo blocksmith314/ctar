@@ -356,7 +356,6 @@ namespace ctar
         /// @param entry_path absolute path string view
         /// @return ResultStatus: ok -> parent directory id of given path;
         ///         error when path does not exist or is root directory(no parent).
-        ResultStatus<entry_id_t> GetParentDirIdByPath(std::string_view entry_path);
 
         /// @brief Get direct‑child directory ids under given parent directory
         /// @param parent_dir_id id of target parent directory
