@@ -680,9 +680,47 @@ namespace
     void PackFileHandle::Clear()
     {
         dir_path_to_dir_id_.clear();
+        uid_to_name_.clear();
+        gid_to_name_.clear();
         dir_id_ = kRootDirId;
         file_id_ = kFileBeginId;
         pack_file_meta_.Clear();
+    }
+
+    const std::string& PackFileHandle::GetUserName(const uint32_t uid)
+    {
+        if (const auto it = uid_to_name_.find(uid); it != uid_to_name_.end())
+        {
+            return it->second;
+        }
+        std::string name = "unknown";
+        if (passwd* pw = getpwuid(uid); pw != nullptr)
+        {
+            name = pw->pw_name;
+        }
+        else
+        {
+            std::println(std::cerr, "failed to get user name for uid {}, will use unknown instead", uid);
+        }
+        return uid_to_name_.emplace(uid, std::move(name)).first->second;
+    }
+
+    const std::string& PackFileHandle::GetGroupName(const uint32_t gid)
+    {
+        if (const auto it = gid_to_name_.find(gid); it != gid_to_name_.end())
+        {
+            return it->second;
+        }
+        std::string name = "unknown";
+        if (const group* gr = getgrgid(gid); gr != nullptr)
+        {
+            name = gr->gr_name;
+        }
+        else
+        {
+            std::println(std::cerr, "failed to get group name for gid {}, will use unknown instead", gid);
+        }
+        return gid_to_name_.emplace(gid, std::move(name)).first->second;
     }
 
     void PackFileHandle::AddEntry(const entry_id_t key, std::string_view name, std::string* data_buf,
@@ -818,8 +856,7 @@ namespace
 
     [[nodiscard]] size_t PackFileHandle::PackFileMetaSerializedSize() const { return pack_file_meta_.SerializedSize(); }
 
-    std::expected<EntryMeta, ErrorStatus> PackFileHandle::ProcessDirEntry(const fs::path& path,
-                                                                          const EntryType entry_type,
+    std::expected<EntryMeta, ErrorStatus> PackFileHandle::ProcessDirEntry(const EntryType entry_type,
                                                                           const struct stat& file_stat)
     {
         EntryMeta file_meta{};
@@ -840,24 +877,10 @@ namespace
 #endif
         file_meta.modify_time = static_cast<long long>(mtime.tv_sec) * 1000 + mtime.tv_nsec / 1000000;
         file_meta.permissions = static_cast<uint32_t>(file_stat.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO));
-        if (passwd* pw = getpwuid(file_stat.st_uid); pw != nullptr)
-        {
-            std::snprintf(file_meta.owner_name, std::size(file_meta.owner_name), "%s", pw->pw_name);
-        }
-        else
-        {
-            std::snprintf(file_meta.owner_name, std::size(file_meta.owner_name), "%s", "unknown");
-            std::println(std::cerr, "failed to get uid of file {}, will use unknown instead", path.c_str());
-        }
-        if (const group* gr = getgrgid(file_stat.st_gid); gr != nullptr)
-        {
-            std::snprintf(file_meta.group_name, std::size(file_meta.group_name), "%s", gr->gr_name);
-        }
-        else
-        {
-            std::snprintf(file_meta.group_name, std::size(file_meta.group_name), "%s", "unknown");
-            std::println(std::cerr, "failed to get group_name of file {}, will use unknown instead", path.c_str());
-        }
+        const std::string& owner_name = GetUserName(static_cast<uint32_t>(file_stat.st_uid));
+        const std::string& group_name = GetGroupName(static_cast<uint32_t>(file_stat.st_gid));
+        std::snprintf(file_meta.owner_name, std::size(file_meta.owner_name), "%s", owner_name.c_str());
+        std::snprintf(file_meta.group_name, std::size(file_meta.group_name), "%s", group_name.c_str());
         file_meta.block_id = 0;
         file_meta.offset = 0;
         return file_meta;
@@ -955,7 +978,7 @@ namespace
         for (const auto& s : entries)
         {
             const std::string& entry_path = s.path.native();
-            auto result = ProcessDirEntry(s.path, s.type, s.file_stat);
+            auto result = ProcessDirEntry(s.type, s.file_stat);
             if (!result)
             {
                 return std::unexpected(result.error());
