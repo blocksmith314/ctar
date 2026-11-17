@@ -232,9 +232,16 @@ namespace ctar
     {
     private:
         std::unordered_map<std::string, entry_id_t> dir_path_to_dir_id_;
+        // Owner/group names for the current scan; a tree usually has only one or two
+        // distinct ids, and a getpwuid/getgrgid pair costs ~0.5 us.
+        std::unordered_map<uint32_t, std::string> uid_to_name_;
+        std::unordered_map<uint32_t, std::string> gid_to_name_;
         uint64_t dir_id_ = kRootDirId;
         uint64_t file_id_ = kFileBeginId;
         PackFileMeta pack_file_meta_;
+
+        [[nodiscard]] const std::string& GetUserName(uint32_t uid);
+        [[nodiscard]] const std::string& GetGroupName(uint32_t gid);
 
     public:
         /// @brief Scan host filesystem directory, import entries into pack metadata
@@ -352,11 +359,6 @@ namespace ctar
         /// @return Result contains ListColWidths on success; error status on lookup failure
         [[nodiscard]] ResultStatus<ListColWidths> GetListWidthByFileId(entry_id_t key) const;
 
-        /// @brief Look up parent directory id by absolute file/directory path
-        /// @param entry_path absolute path string view
-        /// @return ResultStatus: ok -> parent directory id of given path;
-        ///         error when path does not exist or is root directory(no parent).
-
         /// @brief Get direct‑child directory ids under given parent directory
         /// @param parent_dir_id id of target parent directory
         /// @return const reference to list of direct‑child directory ids; empty if directory not exists
@@ -405,13 +407,11 @@ namespace ctar
 
         /// @brief Process filesystem directory entry, extract metadata from OS
         /// @param entry filesystem directory entry from std::filesystem
-        /// @param path path of the entry
         /// @param entry_type kind decided by the caller, so the sort order and the
         ///        recorded metadata cannot disagree
         /// @param file_stat the single lstat() snapshot taken while enumerating
         /// @return EntryMeta on success, ErrorStatus on failure
-        std::expected<EntryMeta, ErrorStatus> ProcessDirEntry(const fs::path& path, EntryType entry_type,
-                                                              const struct stat& file_stat);
+        std::expected<EntryMeta, ErrorStatus> ProcessDirEntry(EntryType entry_type, const struct stat& file_stat);
 
         /// @brief Render directory entries into specified format and write to output stream
         /// @param out output stream for TREE / LIST / TSV output
