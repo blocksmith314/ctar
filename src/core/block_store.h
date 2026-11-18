@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -115,6 +116,29 @@ namespace ctar
             {
                 data.reset();
                 capacity = 0;
+            }
+
+            /// Cap the retained capacity after a task. A buffer that grew beyond
+            /// @p keep is freed and replaced with a small reusable one; the contents
+            /// are dead once the task is done, so nothing is copied. noexcept because
+            /// this runs from a scope guard; a failed allocation leaves capacity at 0.
+            void TrimTo(const size_t keep) noexcept
+            {
+                if (capacity <= keep)
+                {
+                    return;
+                }
+                data.reset();
+                capacity = 0;
+                if (keep == 0)
+                {
+                    return;
+                }
+                data.reset(new (std::nothrow) char[keep]);
+                if (data)
+                {
+                    capacity = keep;
+                }
             }
         };
 

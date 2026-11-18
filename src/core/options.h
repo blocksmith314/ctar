@@ -41,6 +41,10 @@ namespace ctar
 
     constexpr size_t kMaxFileSizePerBlock = 128UL * unit::MiB;
 
+    // Thread-local read/block buffers larger than this are trimmed back to this
+    // size after a task, instead of being held until the process exits.
+    constexpr size_t kMaxRetainedBufferBytes = 128UL * unit::MiB;
+
     constexpr size_t kDefaultSplitFileSize = 4UL * unit::GiB;
 
     // File types that do not require compression
