@@ -315,6 +315,11 @@ namespace ctar
     {
         thread_local RawBuffer tls_read_buf;
         tls_read_buf.EnsureCapacity(block_meta.dir_stats.max_file_size);
+        struct TrimReadBufferOnExit
+        {
+            RawBuffer& buffer;
+            ~TrimReadBufferOnExit() { buffer.TrimTo(kMaxRetainedBufferBytes); }
+        } trim_read_buffer{tls_read_buf};
         auto compress_buffer = AcquireBlockBuffer();
         if (!compress_buffer)
         {
@@ -432,6 +437,11 @@ namespace ctar
         }
         uint64_t block_beg_pos = meta_region_size_ + block_meta.block_file_offset;
         tls_block_buf.EnsureCapacity(block_meta.block_size);
+        struct TrimBlockBufferOnExit
+        {
+            RawBuffer& buffer;
+            ~TrimBlockBufferOnExit() { buffer.TrimTo(kMaxRetainedBufferBytes); }
+        } trim_block_buffer{tls_block_buf};
 
         ResultStatus<size_t> read_status =
             read_file_ptr->RandomRead(block_beg_pos, block_meta.block_size, tls_block_buf.Data());
