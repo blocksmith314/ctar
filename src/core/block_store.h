@@ -270,6 +270,13 @@ namespace ctar
         [[nodiscard]] Status Scan(const std::string& root_path, bool recursive = true);
 
         [[nodiscard]] FileStats GetFileStats() const { return pack_file_handle_.GetFileStats(); }
+
+        /// @brief Actual size of the pack file written by the last successful PackPipeline.
+        /// Computed from the final layout: metadata region + block region + trailing magic.
+        [[nodiscard]] uint64_t GetPackFileSize() const noexcept
+        {
+            return meta_region_size_ + block_region_size_ + sizeof(kMagicNumber);
+        }
     };
 }; // namespace ctar
 #endif // CTAR_BLOCK_STORE_H

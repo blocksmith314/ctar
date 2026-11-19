@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <xxhash.h>
@@ -492,13 +493,23 @@ namespace ctar::cli
         return ParseArgs(static_cast<int>(argv.size()), argv.data(), opt);
     }
 
-    void PrintStats(const FileStats& file_stats, int64_t elapsed_time, std::ostream& out)
+    void PrintStats(const FileStats& file_stats, const uint64_t pack_file_bytes, const int64_t elapsed_time,
+                    std::ostream& out)
     {
-        std::println(out,
-                     "file count: {}, total bytes: {}, compressed bytes: {}, padding bytes: {}, elapsed time {} ms",
-                     file_stats.total_file_count, file_stats.total_original_size, file_stats.total_compressed_size,
-                     file_stats.padding_size, elapsed_time);
-        std::println(out, "compression size percent: {:.2f}%, Throughput: {}/s",
+        std::println(out, "file count: {}, original bytes: {}", file_stats.total_file_count,
+                     file_stats.total_original_size);
+        if (file_stats.padding_size == 0)
+        {
+            std::println(out, "pack file bytes: {} (compressed payload bytes: {})", pack_file_bytes,
+                         file_stats.total_compressed_size);
+        }
+        else
+        {
+            // Older archives may have per-block padding; show it so the size can be accounted for.
+            std::println(out, "pack file bytes: {} (compressed payload bytes: {}, padding bytes: {})",
+                         pack_file_bytes, file_stats.total_compressed_size, file_stats.padding_size);
+        }
+        std::println(out, "elapsed time: {} ms, compression size percent: {:.2f}%, Throughput: {}/s", elapsed_time,
                      CompressionSizePercent(file_stats.total_original_size, file_stats.total_compressed_size),
                      ThroughputPerSec(file_stats.total_original_size, elapsed_time));
     }
@@ -552,7 +563,8 @@ namespace ctar::cli
                                           status.error().message());
                 }
                 auto file_stats = store.GetFileStats();
-                std::println(std::cout, "file count: {}, total bytes: {}, compressed bytes: {}, padding bytes: {}",
+                std::println(std::cout,
+                             "file count: {}, original bytes: {}, compressed payload bytes: {}, padding bytes: {}",
                              file_stats.total_file_count, file_stats.total_original_size,
                              file_stats.total_compressed_size, file_stats.padding_size);
             }
@@ -570,7 +582,7 @@ namespace ctar::cli
                     }
                     auto file_stats = store.GetFileStats();
                     auto elapsed_time = scope_timer.elapsed();
-                    PrintStats(file_stats, elapsed_time);
+                    PrintStats(file_stats, store.GetPackFileSize(), elapsed_time);
                 }
                 else
                 {
@@ -588,7 +600,9 @@ namespace ctar::cli
                 }
                 auto file_stats = store.GetFileStats();
                 auto elapsed_time = scope_timer.elapsed();
-                PrintStats(file_stats, elapsed_time);
+                std::error_code ec;
+                const uint64_t archive_bytes = std::filesystem::file_size(opt.source_path, ec);
+                PrintStats(file_stats, ec ? 0 : archive_bytes, elapsed_time);
             }
             break;
         case CommandType::TREE:

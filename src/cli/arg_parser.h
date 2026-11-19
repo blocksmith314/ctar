@@ -77,7 +77,8 @@ namespace ctar::cli
     Status ParseArgs(int argc, char** argv, CliOption& opt);
     [[nodiscard]] Status ParseArgs(const std::vector<std::string_view>& args, CliOption& opt);
 
-    void PrintStats(const FileStats& file_stats,int64_t elapsed_time,std::ostream& out = std::cout);
+    void PrintStats(const FileStats& file_stats, uint64_t pack_file_bytes, int64_t elapsed_time,
+                    std::ostream& out = std::cout);
 
     Status RunCommand(const CliOption& opt);
 

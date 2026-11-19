@@ -127,27 +127,41 @@ input_dir/resource/bin/file6.bin
 
 ```shell
 > ctar pack input_dir pack_file.ctar
-file count: 10, total bytes: 630, compressed bytes: 190, padding bytes: 20290, elapsed time 10 ms
-compressed ratio: 30.16%, Throughput: 61.5K/s
+file count: 10, original bytes: 630
+pack file bytes: 8386 (compressed payload bytes: 190)
+elapsed time: 10 ms, compression size percent: 30.16%, Throughput: 61.5K/s
 ```
 
 - Packs the specified files under the specified directory using multiple threads
 - `file count`: the total number of files packed
-- `total bytes`: the total number of bytes of the original files in the directory
-- `compressed bytes`: the total number of bytes of the compressed files in the directory
+- `original bytes`: the total number of bytes of the original files in the directory
+- `pack file bytes`: the actual size of the generated archive file
+- `compressed payload bytes`: the total size of the compressed file payloads; excludes the metadata region,
+  block padding and the trailing magic
 - `elapsed time`: total elapsed time; the unit is always milliseconds
-- `compressed ratio`: compression ratio, computed as `compressed bytes` / `total bytes`
-- `Throughput`: throughput, computed as `total bytes` / `elapsed time`
+- `compression size percent`: compression ratio, computed as `compressed payload bytes` / `original bytes`
+- `Throughput`: throughput, computed as `original bytes` / `elapsed time`
+
+The archive size can be accounted for as:
+
+```
+pack file bytes = metadata region + compressed payload bytes + padding bytes + 4
+```
+
+`padding bytes` is the block-region padding (0 for new archives); `stat` still reports it for older archives.
 
 ### Unpacking
 
 ```shell
 > ctar unpack pack_file.ctar output_dir
-file count: 10, total bytes: 630, compressed bytes: 190, padding bytes: 20290, elapsed time 1 ms
-compressed ratio: 30.16%, Throughput: 615.2K/s
+file count: 10, original bytes: 630
+pack file bytes: 8386 (compressed payload bytes: 190)
+elapsed time: 1 ms, compression size percent: 30.16%, Throughput: 615.2K/s
 ```
 
 - Unpacks using multiple threads, restoring the entire packed directory into `output_dir`
+- The fields have the same meaning as for `pack`; `pack file bytes` is the size of the input archive
+- Older archives with per-block padding also show `padding bytes` in the second line
 
 ### Viewing the directory tree
 
