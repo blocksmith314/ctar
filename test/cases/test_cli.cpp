@@ -466,7 +466,7 @@ namespace ctar
             }
             std::string stat_text = output_buf.str();
             ASSERT_TRUE(stat_text.contains(std::format("file count: {}",generator_file_cnt)));
-            ASSERT_TRUE(stat_text.contains(std::format("total bytes: {}",generator_file_size)));
+            ASSERT_TRUE(stat_text.contains(std::format("original bytes: {}",generator_file_size)));
         }
     }
 
@@ -498,7 +498,9 @@ namespace ctar
         }
         std::string pack_text = output_buf.str();
         ASSERT_TRUE(pack_text.contains(std::format("file count: {}",generator_file_cnt)));
-        ASSERT_TRUE(pack_text.contains(std::format("total bytes: {}",generator_file_size)));
+        ASSERT_TRUE(pack_text.contains(std::format("original bytes: {}",generator_file_size)));
+        ASSERT_TRUE(pack_text.contains("compressed payload bytes: "));
+        ASSERT_TRUE(pack_text.contains(std::format("pack file bytes: {}", fs::file_size(arg_pack_file))));
     }
 
     TEST_F(CommandPresetFileTest, UnPack)
@@ -520,8 +522,13 @@ namespace ctar
         std::vector<std::string_view> unpack_args{"CTAR_cli", "unpack", arg_pack_file, arg_unpack_dir};
         status = ParseArgs(unpack_args, unpack_opt);
         EXPECT_TRUE(status) << "failed to parse arg of unpack";
-        result_status = cli::RunCommand(unpack_opt);
+        std::ostringstream output_buf;
+        {
+            test::CoutRedirectGuard redirect(output_buf);
+            result_status = cli::RunCommand(unpack_opt);
+        }
         ASSERT_TRUE(result_status) << "failed to execute unpack command";
+        ASSERT_TRUE(output_buf.str().contains(std::format("pack file bytes: {}", size_bytes)));
 
         const bool is_equal = test::AreDirectoriesEqual(source_dir_, unpack_dir_ / source_dir_);
         EXPECT_TRUE(is_equal) << "the dir is not match";

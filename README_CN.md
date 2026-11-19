@@ -117,27 +117,40 @@ input_dir/resource/bin/file6.bin
 
 ```shell
 > ctar pack input_dir pack_file.ctar
-file count: 10, total bytes: 630, compressed bytes: 190, padding bytes: 20290, elapsed time 10 ms
-compressed ratio: 30.16%, Throughput: 61.5K/s
+file count: 10, original bytes: 630
+pack file bytes: 8386 (compressed payload bytes: 190)
+elapsed time: 10 ms, compression size percent: 30.16%, Throughput: 61.5K/s
 ```
 
 - 利用多线程将指定文件夹下的指定文件进行打包
 - `file count` 打包的文件总数
-- `total bytes` 目录下原始文件的字节总数
-- `compressed bytes` 目录下压缩文件的字节总数
+- `original bytes` 目录下原始文件的字节总数
+- `pack file bytes` 生成归档文件的实际大小
+- `compressed payload bytes` 压缩后的文件 payload 总大小；不包含元数据区、块间 padding 和尾部 magic
 - `elapsed time` 总耗时，单位总是毫秒
-- `compressed ratio` 压缩率，计算公式 `compressed bytes`/`total bytes`
-- `Throughput` 吞吐，计算公式 `total bytes`/`elapsed time`
+- `compression size percent` 压缩率，计算公式 `compressed payload bytes`/`original bytes`
+- `Throughput` 吞吐，计算公式 `original bytes`/`elapsed time`
+
+归档大小可以这样核对：
+
+```
+pack file bytes = 元数据区 + compressed payload bytes + padding bytes + 4
+```
+
+`padding bytes` 是块间 padding（新归档为 0）；`stat` 对旧归档仍会显示实际值。
 
 ### 解包
 
 ```shell
 > ctar unpack pack_file.ctar output_dir
-file count: 10, total bytes: 630, compressed bytes: 190, padding bytes: 20290, elapsed time 1 ms
-compressed ratio: 30.16%, Throughput: 615.2K/s
+file count: 10, original bytes: 630
+pack file bytes: 8386 (compressed payload bytes: 190)
+elapsed time: 1 ms, compression size percent: 30.16%, Throughput: 615.2K/s
 ```
 
 - 利用多线程进行解包，会将打包的整个目录解压到 `output_dir` 中
+- 字段含义与 `pack` 相同；`pack file bytes` 是输入归档文件的大小
+- 旧归档如果存在块间 padding，第二行会额外显示 `padding bytes`
 
 ### 查看目录树
 
