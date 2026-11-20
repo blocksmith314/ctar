@@ -33,6 +33,9 @@ COMMANDS
     dump [options] <archive>
         Export archive metadata as TSV (tab-separated values).
 
+    stat <archive>
+        Print archive statistics and the size breakdown.
+
     hash [options] <input-data>
         Calculate XXHASH (XXH64) of input data or file (if '-f' provide)
 
@@ -105,6 +108,7 @@ EXAMPLES
     ctar dump archive.ctar
     ctar dump -H -o meta.tsv archive.ctar
     ctar dump -H -o meta.tsv archive.ctar sub/dir
+    ctar stat archive.ctar
     ctar hash hello
     ctar hash -f xx.txt
 
@@ -563,10 +567,33 @@ namespace ctar::cli
                                           status.error().message());
                 }
                 auto file_stats = store.GetFileStats();
-                std::println(std::cout,
-                             "file count: {}, original bytes: {}, compressed payload bytes: {}, padding bytes: {}",
-                             file_stats.total_file_count, file_stats.total_original_size,
-                             file_stats.total_compressed_size, file_stats.padding_size);
+                std::error_code ec;
+                const uint64_t header_bytes = store.GetHeaderSize();
+                const uint64_t metadata_bytes = store.GetFileMetaSize();
+                const uint64_t compressed_bytes = file_stats.total_compressed_size;
+                const uint64_t block_padding = file_stats.padding_size;
+                const uint64_t magic_bytes = sizeof(kMagicNumber);
+                const uint64_t computed_bytes =
+                    header_bytes + metadata_bytes + compressed_bytes + block_padding + magic_bytes;
+                const uint64_t archive_bytes = std::filesystem::file_size(opt.pack_file_path, ec);
+                const uint64_t pack_file_bytes = ec ? computed_bytes : archive_bytes;
+
+                std::println(std::cout, "file count: {}, directories: {}, blocks: {}", file_stats.total_file_count,
+                             store.GetDirectoryCount(), store.GetBlockCount());
+                std::println(std::cout, "original bytes: {}", file_stats.total_original_size);
+                std::println(std::cout, "compression size percent: {:.2f}%",
+                             CompressionSizePercent(file_stats.total_original_size, file_stats.total_compressed_size));
+                std::println(std::cout, "");
+                std::println(std::cout, "layout (bytes):");
+                std::println(std::cout, "  {:<20}{:>12}", "pack file bytes:", pack_file_bytes);
+                std::println(std::cout, "    {:<18}{:>12}", "header:", header_bytes);
+                std::println(std::cout, "    {:<18}{:>12}", "metadata:", metadata_bytes);
+                std::println(std::cout, "    {:<18}{:>12}", "compressed data:", compressed_bytes);
+                if (block_padding != 0)
+                {
+                    std::println(std::cout, "    {:<18}{:>12}", "block padding:", block_padding);
+                }
+                std::println(std::cout, "    {:<18}{:>12}", "tail magic:", magic_bytes);
             }
             break;
         case CommandType::PACK:

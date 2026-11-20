@@ -277,6 +277,20 @@ namespace ctar
         {
             return meta_region_size_ + block_region_size_ + sizeof(kMagicNumber);
         }
+
+        /// @brief Serialized size of the pack file header (16 bytes).
+        [[nodiscard]] uint64_t GetHeaderSize() const { return pack_file_header_.SerializedSize(); }
+
+        /// @brief Size of everything after the header up to the block region (the header's file_meta_size).
+        [[nodiscard]] uint64_t GetFileMetaSize() const
+        {
+            const uint64_t header_size = pack_file_header_.SerializedSize();
+            return meta_region_size_ >= header_size ? meta_region_size_ - header_size : 0;
+        }
+
+        [[nodiscard]] uint64_t GetBlockCount() const { return data_block_metas_.size(); }
+
+        [[nodiscard]] size_t GetDirectoryCount() const { return pack_file_handle_.GetDirectoryCount(); }
     };
 }; // namespace ctar
 #endif // CTAR_BLOCK_STORE_H

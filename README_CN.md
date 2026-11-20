@@ -152,6 +152,27 @@ elapsed time: 1 ms, compression size percent: 30.16%, Throughput: 615.2K/s
 - 字段含义与 `pack` 相同；`pack file bytes` 是输入归档文件的大小
 - 旧归档如果存在块间 padding，第二行会额外显示 `padding bytes`
 
+### 归档统计
+
+```shell
+> ctar stat pack_file.ctar
+file count: 10, directories: 10, blocks: 5
+original bytes: 630
+compression size percent: 30.16%
+
+layout (bytes):
+  pack file bytes:            8386
+    header:                     16
+    metadata:                 8176
+    compressed data:           190
+    tail magic:                  4
+```
+
+- `directories` 包含根目录
+- `metadata` 是 header 里存储的 `file_meta_size`：文件元数据、块元数据和 4K 对齐 padding
+- 旧归档如果存在块间 padding，会额外显示 `block padding`
+- `pack file bytes = header + metadata + compressed data + tail magic`（有 `block padding` 时再加上）
+
 ### 查看目录树
 
 ```shell
