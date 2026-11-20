@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <sstream>
 
 #include "src/cli/arg_parser.h"
 #include "test/tools/dir_compare.h"
@@ -467,6 +468,28 @@ namespace ctar
             std::string stat_text = output_buf.str();
             ASSERT_TRUE(stat_text.contains(std::format("file count: {}",generator_file_cnt)));
             ASSERT_TRUE(stat_text.contains(std::format("original bytes: {}",generator_file_size)));
+            ASSERT_TRUE(stat_text.contains("layout (bytes):"));
+            const auto stat_value = [&stat_text](std::string_view label) -> uint64_t
+            {
+                const auto pos = stat_text.find(label);
+                if (pos == std::string::npos)
+                {
+                    return 0;
+                }
+                std::istringstream stream(stat_text.substr(pos + label.size()));
+                uint64_t value = 0;
+                stream >> value;
+                return value;
+            };
+            const uint64_t pack_bytes = stat_value("pack file bytes:");
+            const uint64_t header_bytes = stat_value("header:");
+            const uint64_t metadata_bytes = stat_value("metadata:");
+            const uint64_t compressed_bytes = stat_value("compressed data:");
+            const uint64_t padding_bytes = stat_value("block padding:");
+            const uint64_t magic_bytes = stat_value("tail magic:");
+            EXPECT_EQ(header_bytes, 16U);
+            EXPECT_EQ(pack_bytes, fs::file_size(arg_pack_file));
+            EXPECT_EQ(header_bytes + metadata_bytes + compressed_bytes + padding_bytes + magic_bytes, pack_bytes);
         }
     }
 

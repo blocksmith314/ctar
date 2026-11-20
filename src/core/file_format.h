@@ -312,6 +312,9 @@ namespace ctar
                     pack_file_meta_.total_compressed_size, pack_file_meta_.padding_size};
         }
 
+        /// @brief Number of directory entries, including the root directory.
+        [[nodiscard]] size_t GetDirectoryCount() const { return pack_file_meta_.dir_entry_records.size(); }
+
         /// @brief Add entry metadata into map, append name string to data buffer
         /// @param key unique entry id
         /// @param name entry dir/file name

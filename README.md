@@ -163,6 +163,27 @@ elapsed time: 1 ms, compression size percent: 30.16%, Throughput: 615.2K/s
 - The fields have the same meaning as for `pack`; `pack file bytes` is the size of the input archive
 - Older archives with per-block padding also show `padding bytes` in the second line
 
+### Archive statistics
+
+```shell
+> ctar stat pack_file.ctar
+file count: 10, directories: 10, blocks: 5
+original bytes: 630
+compression size percent: 30.16%
+
+layout (bytes):
+  pack file bytes:            8386
+    header:                     16
+    metadata:                 8176
+    compressed data:           190
+    tail magic:                  4
+```
+
+- `directories` includes the root directory
+- `metadata` is the stored `file_meta_size`: file metadata, block metadata and the 4K alignment padding
+- old archives with per-block padding add a `block padding` line
+- `pack file bytes = header + metadata + compressed data + tail magic` (plus `block padding` when present)
+
 ### Viewing the directory tree
 
 ```shell
