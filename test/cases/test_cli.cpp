@@ -483,11 +483,13 @@ namespace ctar
             };
             const uint64_t pack_bytes = stat_value("pack file bytes:");
             const uint64_t header_bytes = stat_value("header:");
-            const uint64_t metadata_bytes = stat_value("metadata:");
-            const uint64_t compressed_bytes = stat_value("compressed data:");
+            const uint64_t metadata_bytes = stat_value("metadata (compressed):");
+            const uint64_t metadata_original_bytes = stat_value("metadata (original):");
+            const uint64_t compressed_bytes = stat_value("file data:");
             const uint64_t padding_bytes = stat_value("block padding:");
             const uint64_t magic_bytes = stat_value("tail magic:");
-            EXPECT_EQ(header_bytes, 16U);
+            EXPECT_EQ(header_bytes, 4096U);
+            EXPECT_EQ(metadata_bytes, metadata_original_bytes);  // small fixture metadata is below 1 MiB
             EXPECT_EQ(pack_bytes, fs::file_size(arg_pack_file));
             EXPECT_EQ(header_bytes + metadata_bytes + compressed_bytes + padding_bytes + magic_bytes, pack_bytes);
         }

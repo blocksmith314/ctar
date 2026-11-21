@@ -500,22 +500,22 @@ namespace ctar::cli
     void PrintStats(const FileStats& file_stats, const uint64_t pack_file_bytes, const int64_t elapsed_time,
                     std::ostream& out)
     {
-        std::println(out, "file count: {}, original bytes: {}", file_stats.total_file_count,
-                     file_stats.total_original_size);
-        if (file_stats.padding_size == 0)
+        std::println(out, "file count: {}, original bytes: {}", file_stats.file_count,
+                     file_stats.file_data_original_size);
+        if (file_stats.block_padding_size == 0)
         {
             std::println(out, "pack file bytes: {} (compressed payload bytes: {})", pack_file_bytes,
-                         file_stats.total_compressed_size);
+                         file_stats.file_data_compressed_size);
         }
         else
         {
             // Older archives may have per-block padding; show it so the size can be accounted for.
             std::println(out, "pack file bytes: {} (compressed payload bytes: {}, padding bytes: {})",
-                         pack_file_bytes, file_stats.total_compressed_size, file_stats.padding_size);
+                         pack_file_bytes, file_stats.file_data_compressed_size, file_stats.block_padding_size);
         }
         std::println(out, "elapsed time: {} ms, compression size percent: {:.2f}%, Throughput: {}/s", elapsed_time,
-                     CompressionSizePercent(file_stats.total_original_size, file_stats.total_compressed_size),
-                     ThroughputPerSec(file_stats.total_original_size, elapsed_time));
+                     CompressionSizePercent(file_stats.file_data_original_size, file_stats.file_data_compressed_size),
+                     ThroughputPerSec(file_stats.file_data_original_size, elapsed_time));
     }
 
     Status RunCommand(const CliOption& opt)
@@ -561,39 +561,72 @@ namespace ctar::cli
             break;
         case CommandType::STAT:
             {
-                if (Status status = store.RestoreBlocksFromPack(opt.pack_file_path); !status)
+                Status status = store.ReadPackHeaderOnly(opt.pack_file_path);
+                if (!status)
                 {
-                    return error_run_time("failed to restore meta from '{}': {}", opt.pack_file_path,
+                    return error_run_time("failed to read header from '{}': {}", opt.pack_file_path,
                                           status.error().message());
                 }
-                auto file_stats = store.GetFileStats();
                 std::error_code ec;
-                const uint64_t header_bytes = store.GetHeaderSize();
-                const uint64_t metadata_bytes = store.GetFileMetaSize();
-                const uint64_t compressed_bytes = file_stats.total_compressed_size;
-                const uint64_t block_padding = file_stats.padding_size;
-                const uint64_t magic_bytes = sizeof(kMagicNumber);
-                const uint64_t computed_bytes =
-                    header_bytes + metadata_bytes + compressed_bytes + block_padding + magic_bytes;
                 const uint64_t archive_bytes = std::filesystem::file_size(opt.pack_file_path, ec);
-                const uint64_t pack_file_bytes = ec ? computed_bytes : archive_bytes;
 
-                std::println(std::cout, "file count: {}, directories: {}, blocks: {}", file_stats.total_file_count,
-                             store.GetDirectoryCount(), store.GetBlockCount());
-                std::println(std::cout, "original bytes: {}", file_stats.total_original_size);
-                std::println(std::cout, "compression size percent: {:.2f}%",
-                             CompressionSizePercent(file_stats.total_original_size, file_stats.total_compressed_size));
-                std::println(std::cout, "");
-                std::println(std::cout, "layout (bytes):");
-                std::println(std::cout, "  {:<20}{:>12}", "pack file bytes:", pack_file_bytes);
-                std::println(std::cout, "    {:<18}{:>12}", "header:", header_bytes);
-                std::println(std::cout, "    {:<18}{:>12}", "metadata:", metadata_bytes);
-                std::println(std::cout, "    {:<18}{:>12}", "compressed data:", compressed_bytes);
-                if (block_padding != 0)
+                if (store.IsLegacyLayout())
                 {
-                    std::println(std::cout, "    {:<18}{:>12}", "block padding:", block_padding);
+                    status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                    if (!status)
+                    {
+                        return error_run_time("failed to restore meta from '{}': {}", opt.pack_file_path,
+                                              status.error().message());
+                    }
+                    auto file_stats = store.GetFileStats();
+                    const uint64_t header_bytes = store.GetHeaderSize();
+                    const uint64_t metadata_bytes = store.GetFileMetaSize();
+                    const uint64_t compressed_bytes = file_stats.file_data_compressed_size;
+                    const uint64_t block_padding = file_stats.block_padding_size;
+                    const uint64_t magic_bytes = sizeof(kMagicNumber);
+                    const uint64_t computed_bytes =
+                        header_bytes + metadata_bytes + compressed_bytes + block_padding + magic_bytes;
+                    const uint64_t pack_file_bytes = ec ? computed_bytes : archive_bytes;
+
+                    std::println(std::cout, "file count: {}, directories: {}, blocks: {}", file_stats.file_count,
+                                 store.GetDirectoryCount(), store.GetBlockCount());
+                    std::println(std::cout, "original bytes: {}", file_stats.file_data_original_size);
+                    std::println(std::cout, "compression size percent: {:.2f}%",
+                                 CompressionSizePercent(file_stats.file_data_original_size,
+                                                       file_stats.file_data_compressed_size));
+                    std::println(std::cout, "");
+                    std::println(std::cout, "layout (bytes):");
+                    std::println(std::cout, "  {:<26}{:>12}", "pack file bytes:", pack_file_bytes);
+                    std::println(std::cout, "    {:<24}{:>12}", "header:", header_bytes);
+                    std::println(std::cout, "    {:<24}{:>12}", "metadata:", metadata_bytes);
+                    std::println(std::cout, "    {:<24}{:>12}", "compressed data:", compressed_bytes);
+                    if (block_padding != 0)
+                    {
+                        std::println(std::cout, "    {:<24}{:>12}", "block padding:", block_padding);
+                    }
+                    std::println(std::cout, "    {:<24}{:>12}", "tail magic:", magic_bytes);
                 }
-                std::println(std::cout, "    {:<18}{:>12}", "tail magic:", magic_bytes);
+                else
+                {
+                    const auto& header = store.GetPackHeader();
+                    const uint64_t pack_file_bytes = ec ? header.pack_file_size : archive_bytes;
+                    std::println(std::cout, "file count: {}, directories: {}, blocks: {}", header.file_count,
+                                 header.directory_count, header.block_count);
+                    std::println(std::cout, "original bytes: {}", header.file_data_original_size);
+                    std::println(std::cout, "compression size percent: {:.2f}%",
+                                 CompressionSizePercent(header.file_data_original_size,
+                                                       header.file_data_compressed_size));
+                    std::println(std::cout, "");
+                    std::println(std::cout, "layout (bytes):");
+                    std::println(std::cout, "  {:<26}{:>12}", "pack file bytes:", pack_file_bytes);
+                    std::println(std::cout, "    {:<24}{:>12}", "header:", PackFileHeader::kSerializedSize);
+                    std::println(std::cout, "    {:<24}{:>12}", "file data:", header.file_data_compressed_size);
+                    std::println(std::cout, "    {:<24}{:>12}", "metadata (compressed):",
+                                 header.metadata_compressed_size);
+                    std::println(std::cout, "    {:<24}{:>12}", "metadata (original):",
+                                 header.metadata_original_size);
+                    std::println(std::cout, "    {:<24}{:>12}", "tail magic:", sizeof(kMagicNumber));
+                }
             }
             break;
         case CommandType::PACK:

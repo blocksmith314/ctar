@@ -45,6 +45,9 @@ namespace ctar
     // size after a task, instead of being held until the process exits.
     constexpr size_t kMaxRetainedBufferBytes = 128UL * unit::MiB;
 
+    // Metadata is compressed only when its serialized size reaches this threshold.
+    constexpr size_t kMetadataCompressionThreshold = 1UL * unit::MiB;
+
     constexpr size_t kDefaultSplitFileSize = 4UL * unit::GiB;
 
     // File types that do not require compression

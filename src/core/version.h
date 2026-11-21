@@ -51,7 +51,7 @@ namespace ctar
     // Bump this ONLY when the byte layout changes -- never to match the tool
     // version above.
     constexpr uint8_t kFileFormatVersionMajor = 1;
-    constexpr uint8_t kFileFormatVersionMinor = 0;
+    constexpr uint8_t kFileFormatVersionMinor = 1;
     constexpr uint8_t kFileFormatVersionPatch = 0;
 
 

@@ -128,7 +128,7 @@ input_dir/resource/bin/file6.bin
 ```shell
 > ctar pack input_dir pack_file.ctar
 file count: 10, original bytes: 630
-pack file bytes: 8386 (compressed payload bytes: 190)
+pack file bytes: 10201 (compressed payload bytes: 190)
 elapsed time: 10 ms, compression size percent: 30.16%, Throughput: 61.5K/s
 ```
 
@@ -145,17 +145,18 @@ elapsed time: 10 ms, compression size percent: 30.16%, Throughput: 61.5K/s
 The archive size can be accounted for as:
 
 ```
-pack file bytes = metadata region + compressed payload bytes + padding bytes + 4
+pack file bytes = header + file data + metadata (compressed) + 4
 ```
 
-`padding bytes` is the block-region padding (0 for new archives); `stat` still reports it for older archives.
+Metadata is compressed only when it reaches 1 MiB; below that, the compressed and original metadata sizes are
+equal. `stat` still reports the 1.0.0 layout for older archives.
 
 ### Unpacking
 
 ```shell
 > ctar unpack pack_file.ctar output_dir
 file count: 10, original bytes: 630
-pack file bytes: 8386 (compressed payload bytes: 190)
+pack file bytes: 10201 (compressed payload bytes: 190)
 elapsed time: 1 ms, compression size percent: 30.16%, Throughput: 615.2K/s
 ```
 
@@ -172,17 +173,19 @@ original bytes: 630
 compression size percent: 30.16%
 
 layout (bytes):
-  pack file bytes:            8386
-    header:                     16
-    metadata:                 8176
-    compressed data:           190
-    tail magic:                  4
+  pack file bytes:            10201
+    header:                    4096
+    file data:                  190
+    metadata (compressed):     5911
+    metadata (original):       5911
+    tail magic:                   4
 ```
 
 - `directories` includes the root directory
-- `metadata` is the stored `file_meta_size`: file metadata, block metadata and the 4K alignment padding
-- old archives with per-block padding add a `block padding` line
-- `pack file bytes = header + metadata + compressed data + tail magic` (plus `block padding` when present)
+- `file data` is the compressed file payload total
+- `metadata (compressed)` is the stored metadata size; `metadata (original)` is its size before compression
+- metadata is compressed only when it reaches 1 MiB, so small archives show equal values
+- 1.0.0 archives fall back to the old layout (`header`, `metadata`, `compressed data`, `tail magic`)
 
 ### Viewing the directory tree
 

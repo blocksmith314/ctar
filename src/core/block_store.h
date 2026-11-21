@@ -60,20 +60,29 @@ namespace ctar
 
         std::vector<DataBlockMeta> data_block_metas_;
 
-        // Size of the metadata region at the front of the pack file, made up of
-        // four parts:
-        //   1. pack file header     (PackFileHeader)
-        //   2. file-handle metadata (PackFileHandle)
-        //   3. block count
-        //   4. DataBlockMeta per block
-        // Always 4K-aligned. Because the region starts at file offset 0, this value
-        // is also the offset where the block region begins.
+        // 1.0.0 layout only: size of the front metadata region (header + metadata).
+        // In 1.1.0 the metadata lives at the end and this stays 0.
         uint64_t meta_region_size_ = 0;
 
-        // Size of the block region: the sum of the 4K-aligned size of every block.
-        // Filled in by the writer thread; the pack file is finally truncated to
-        // meta_region_size_ + block_region_size_.
+        // Start of the file-data (block) region: 4096 in 1.1.0, meta_region_size_ in
+        // the 1.0.0 layout.
+        uint64_t file_data_offset_ = 0;
+
+        // Size of the file-data region: the sum of every block payload (plus block
+        // padding in the 1.0.0 layout). Filled in by the writer thread.
         uint64_t block_region_size_ = 0;
+
+        // Size of the stored metadata blob (compressed in 1.1.0 when above threshold).
+        uint64_t metadata_original_size_ = 0;
+        uint64_t metadata_compressed_size_ = 0;
+        uint64_t metadata_compressed_type_ = 0;
+        uint64_t metadata_checksum_ = 0;
+
+        // 1.0.0 layout only: size of the metadata region after the header.
+        uint64_t legacy_file_meta_size_ = 0;
+
+        uint64_t archive_size_ = 0;
+        bool legacy_layout_ = false;
 
         // Upper bound on block_region_size_, accumulated in BuildBlocksFromFileStats
         // from the *uncompressed* block sizes. Used to extend the file up front so
@@ -82,7 +91,7 @@ namespace ctar
         uint64_t max_block_region_size_ = 0;
 
         // Total compressed size of all files
-        uint64_t total_compressed_size_ = 0;
+        uint64_t file_data_compressed_size_ = 0;
 
         uint64_t last_write_block_id_ = 0;
 
@@ -168,7 +177,7 @@ namespace ctar
         CompressionConfig compression_config_;
         unsigned thread_cnt_ = 1;
 
-        [[nodiscard]] uint64_t GetMetaSize() const;
+        [[nodiscard]] uint64_t GetRawMetaSize() const;
 
         /// @brief Packs one block in place (hash + compress + queue to writer); blocks on the pool.
         /// @param block_meta metadata of block
@@ -272,25 +281,33 @@ namespace ctar
         [[nodiscard]] FileStats GetFileStats() const { return pack_file_handle_.GetFileStats(); }
 
         /// @brief Actual size of the pack file written by the last successful PackPipeline.
-        /// Computed from the final layout: metadata region + block region + trailing magic.
         [[nodiscard]] uint64_t GetPackFileSize() const noexcept
         {
-            return meta_region_size_ + block_region_size_ + sizeof(kMagicNumber);
+            return file_data_offset_ + block_region_size_ + metadata_compressed_size_ + sizeof(kMagicNumber);
         }
 
-        /// @brief Serialized size of the pack file header (16 bytes).
-        [[nodiscard]] uint64_t GetHeaderSize() const { return pack_file_header_.SerializedSize(); }
-
-        /// @brief Size of everything after the header up to the block region (the header's file_meta_size).
-        [[nodiscard]] uint64_t GetFileMetaSize() const
+        /// @brief Serialized size of the archive header (4096 in 1.1.0, 16 in 1.0.0).
+        [[nodiscard]] uint64_t GetHeaderSize() const noexcept
         {
-            const uint64_t header_size = pack_file_header_.SerializedSize();
-            return meta_region_size_ >= header_size ? meta_region_size_ - header_size : 0;
+            return legacy_layout_ ? LegacyPackFileHeader::kSerializedSize : PackFileHeader::kSerializedSize;
+        }
+
+        /// @brief Size of the stored metadata region.
+        [[nodiscard]] uint64_t GetFileMetaSize() const noexcept
+        {
+            return legacy_layout_ ? legacy_file_meta_size_ : metadata_compressed_size_;
         }
 
         [[nodiscard]] uint64_t GetBlockCount() const { return data_block_metas_.size(); }
 
         [[nodiscard]] size_t GetDirectoryCount() const { return pack_file_handle_.GetDirectoryCount(); }
+
+        [[nodiscard]] bool IsLegacyLayout() const noexcept { return legacy_layout_; }
+
+        [[nodiscard]] const PackFileHeader& GetPackHeader() const noexcept { return pack_file_header_; }
+
+        /// @brief Read and validate only the archive header; no metadata is parsed.
+        [[nodiscard]] Status ReadPackHeaderOnly(const std::string& pack_file_path);
     };
 }; // namespace ctar
 #endif // CTAR_BLOCK_STORE_H
