@@ -177,6 +177,105 @@ namespace ctar
             << status.error().message();
     }
 
+    TEST(DataBlobMeta, RejectsNonIncreasingFileIds)
+    {
+        DataBlockMeta block;
+        block.file_ids = {2, 1};
+        block.file_orig_sizes = {4, 4};
+        block.file_compressed_sizes = {4, 4};
+        block.file_compressed_types = {CompressionType::kNone, CompressionType::kNone};
+        block.file_offsets = {0, 4};
+        block.file_hashes = {0, 0};
+        block.payload_size = 8;
+        block.block_size = 8;
+
+        const Status status = ValidateDataBlockMeta(block);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("not strictly increasing"), std::string::npos)
+            << status.error().message();
+    }
+
+    TEST(DataBlobMeta, RejectsOverlappingFileRanges)
+    {
+        DataBlockMeta block;
+        block.file_ids = {1, 2};
+        block.file_orig_sizes = {4, 4};
+        block.file_compressed_sizes = {4, 4};
+        block.file_compressed_types = {CompressionType::kNone, CompressionType::kNone};
+        block.file_offsets = {0, 2}; // second range [2,6) overlaps the first [0,4)
+        block.file_hashes = {0, 0};
+        block.payload_size = 8;
+        block.block_size = 8;
+
+        const Status status = ValidateDataBlockMeta(block);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("overlaps the previous entry"), std::string::npos)
+            << status.error().message();
+    }
+
+    TEST(DataBlobMeta, RejectsLz4ExpansionBeyondPhysicalLimit)
+    {
+        DataBlockMeta block;
+        block.file_ids = {1};
+        block.file_orig_sizes = {256};
+        block.file_compressed_sizes = {1}; // 256 > 255 * 1, impossible for LZ4
+        block.file_compressed_types = {CompressionType::kLZ4};
+        block.file_offsets = {0};
+        block.file_hashes = {0};
+        block.payload_size = 1;
+        block.block_size = 1;
+
+        const Status status = ValidateDataBlockMeta(block);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("LZ4 expansion bound"), std::string::npos)
+            << status.error().message();
+    }
+
+    TEST(DataBlobMeta, RejectsLz4SizesBeyondApiLimit)
+    {
+        // 2^31 is one past INT_MAX. The ratio stays plausible so the expansion check is
+        // not the one that fires.
+        constexpr uint64_t kBeyondInt = 0x80000000ULL;
+        constexpr uint64_t kCompressed = kBeyondInt / 255 + 1;
+        DataBlockMeta block;
+        block.file_ids = {1};
+        block.file_orig_sizes = {kBeyondInt};
+        block.file_compressed_sizes = {kCompressed};
+        block.file_compressed_types = {CompressionType::kLZ4HC};
+        block.file_offsets = {0};
+        block.file_hashes = {0};
+        block.payload_size = kCompressed;
+        block.block_size = kCompressed;
+
+        const Status status = ValidateDataBlockMeta(block);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("LZ4 entry original size"), std::string::npos)
+            << status.error().message();
+    }
+
+    TEST(DataBlobMeta, RejectsLz4EntryWithZeroStoredSize)
+    {
+        DataBlockMeta block;
+        block.file_ids = {1};
+        block.file_orig_sizes = {16};
+        block.file_compressed_sizes = {0};
+        block.file_compressed_types = {CompressionType::kLZ4};
+        block.file_offsets = {0};
+        block.file_hashes = {0};
+        block.payload_size = 0;
+        block.block_size = 0;
+
+        const Status status = ValidateDataBlockMeta(block);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("stores 0 bytes"), std::string::npos)
+            << status.error().message();
+    }
+
     TEST(DataBlobMeta, SerializeDeserializeEmptyArrays)
     {
         DataBlockMeta src;
