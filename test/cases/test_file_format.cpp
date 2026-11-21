@@ -87,12 +87,13 @@ namespace ctar
         src.dir_id = 2;
         src.file_ids = {10, 11, 12};
         src.file_orig_sizes = {100, 200, 300};
-        src.file_compressed_sizes = {50, 100, 150};
+        // A kNone entry stores the file verbatim, so its stored size equals the original.
+        src.file_compressed_sizes = {50, 100, 300};
         src.file_compressed_types = {CompressionType::kLZ4, CompressionType::kLZ4HC, CompressionType::kNone};
         src.file_offsets = {0, 100, 200};
         src.file_hashes = {0x12, 0x34, 0x56};
         src.block_file_offset = 0;
-        src.payload_size = 350;
+        src.payload_size = 500;
         src.block_size = 4096;
         std::string buf;
         src.Serialize(&buf);
@@ -119,6 +120,50 @@ namespace ctar
         EXPECT_EQ(dst.block_size, src.block_size);
     }
 
+
+    TEST(DataBlobMeta, RejectsNoneEntryWithMismatchedSizes)
+    {
+        // A kNone entry stores the file verbatim; a stored size larger than the
+        // original would make unpack copy past the decompression buffer.
+        DataBlockMeta src;
+        src.file_ids = {1};
+        src.file_orig_sizes = {1};
+        src.file_compressed_sizes = {4};
+        src.file_compressed_types = {CompressionType::kNone};
+        src.file_offsets = {0};
+        src.file_hashes = {0};
+        src.payload_size = 4;
+        src.block_size = 4;
+
+        std::string buf;
+        src.Serialize(&buf);
+        DataBlockMeta dst;
+        const char* p = buf.data();
+        const Status status = dst.Deserialize(p, buf.data() + buf.size());
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+    }
+
+    TEST(DataBlobMeta, RejectsUnknownCompressionType)
+    {
+        DataBlockMeta src;
+        src.file_ids = {1};
+        src.file_orig_sizes = {4};
+        src.file_compressed_sizes = {4};
+        src.file_compressed_types = {static_cast<CompressionType>(0x7F)};
+        src.file_offsets = {0};
+        src.file_hashes = {0};
+        src.payload_size = 4;
+        src.block_size = 4;
+
+        std::string buf;
+        src.Serialize(&buf);
+        DataBlockMeta dst;
+        const char* p = buf.data();
+        const Status status = dst.Deserialize(p, buf.data() + buf.size());
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+    }
 
     TEST(DataBlobMeta, SerializeDeserializeEmptyArrays)
     {

@@ -341,7 +341,9 @@ namespace
         }
 
         // The block has to be internally consistent: the payload has to fit in the block
-        // and every compressed file has to fit in the payload.
+        // and every compressed file has to fit in the payload. A kNone file is stored
+        // verbatim, so its stored size must equal the original size; Decompress(kNone)
+        // copies exactly that many bytes into a buffer sized for the original file.
         if (payload_size > block_size)
         {
             return CorruptBlockMeta();
@@ -350,6 +352,20 @@ namespace
         {
             if (file_offsets[i] > payload_size || file_compressed_sizes[i] > payload_size - file_offsets[i])
             {
+                return CorruptBlockMeta();
+            }
+            switch (file_compressed_types[i])
+            {
+            case CompressionType::kNone:
+                if (file_compressed_sizes[i] != file_orig_sizes[i])
+                {
+                    return CorruptBlockMeta();
+                }
+                break;
+            case CompressionType::kLZ4:
+            case CompressionType::kLZ4HC:
+                break;
+            default:
                 return CorruptBlockMeta();
             }
         }

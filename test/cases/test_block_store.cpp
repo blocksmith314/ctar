@@ -491,6 +491,112 @@ namespace ctar
     }
 
 
+    TEST(MalformedArchive, RejectsNoneFileWithOversizedCompressedSize)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        std::string bytes = fixture.Bytes();
+
+        constexpr size_t kMetadataOffsetField = 96;
+        constexpr size_t kMetadataSizeField = 112;
+        constexpr size_t kMetadataTypeField = 120;
+        constexpr size_t kMetadataChecksumField = 128;
+
+        const size_t metadata_offset = ReadU64At(bytes, kMetadataOffsetField);
+        const size_t metadata_size = ReadU64At(bytes, kMetadataSizeField);
+        ASSERT_GT(metadata_size, 0U);
+        ASSERT_EQ(ReadU64At(bytes, kMetadataTypeField), static_cast<uint64_t>(CompressionType::kNone))
+            << "the fixture archive is expected to store metadata raw";
+
+        size_t pos = metadata_offset;
+        const size_t metadata_end = metadata_offset + metadata_size;
+        const auto read_u64 = [&]()
+        {
+            EXPECT_LE(pos + sizeof(uint64_t), metadata_end);
+            const uint64_t value = ReadU64At(bytes, pos);
+            pos += sizeof(uint64_t);
+            return value;
+        };
+
+        // PackFileMeta: four scalar fields, then the two name buffers.
+        for (int i = 0; i < 4; ++i)
+        {
+            (void)read_u64();
+        }
+        pos += static_cast<size_t>(read_u64()); // dir_name_data
+        pos += static_cast<size_t>(read_u64()); // file_name_data
+
+        // dir_entry_records / file_entry_records: count * (key + EntryRecord).
+        constexpr size_t kEntryRecordSize = 2 * sizeof(uint64_t) + 176;
+        for (int map = 0; map < 2; ++map)
+        {
+            const uint64_t count = read_u64();
+            pos += static_cast<size_t>(count) * (sizeof(uint64_t) + kEntryRecordSize);
+        }
+
+        // The three id -> vector maps: count * (key + value_count + values).
+        for (int map = 0; map < 3; ++map)
+        {
+            const uint64_t count = read_u64();
+            for (uint64_t i = 0; i < count; ++i)
+            {
+                (void)read_u64(); // key
+                const uint64_t value_count = read_u64();
+                pos += static_cast<size_t>(value_count) * sizeof(uint64_t);
+            }
+        }
+
+        const uint64_t block_count = read_u64();
+        ASSERT_GE(block_count, 1U);
+        (void)read_u64(); // block_id
+        (void)read_u64(); // dir_id
+        (void)read_u64(); // block_file_offset
+        const uint64_t payload_size = read_u64();
+        (void)read_u64(); // block_size
+        (void)read_u64(); // hash_value
+        ASSERT_GT(payload_size, 1U);
+
+        const uint64_t file_count = read_u64();
+        ASSERT_GE(file_count, 1U);
+        pos += static_cast<size_t>(file_count) * sizeof(uint64_t); // file_ids
+
+        const uint64_t orig_count = read_u64();
+        ASSERT_EQ(orig_count, file_count);
+        const size_t orig_sizes_offset = pos;
+        pos += static_cast<size_t>(orig_count) * sizeof(uint64_t);
+
+        const uint64_t compressed_count = read_u64();
+        ASSERT_EQ(compressed_count, file_count);
+        const size_t compressed_sizes_offset = pos;
+        pos += static_cast<size_t>(compressed_count) * sizeof(uint64_t);
+
+        const uint64_t type_count = read_u64();
+        ASSERT_EQ(type_count, file_count);
+        const size_t types_offset = pos;
+        pos += static_cast<size_t>(type_count);
+        ASSERT_LE(pos, metadata_end);
+
+        // First file: raw storage whose declared payload is larger than the one-byte
+        // buffer unpack would allocate for it.
+        WriteU64At(bytes, orig_sizes_offset, 1);
+        WriteU64At(bytes, compressed_sizes_offset, payload_size);
+        bytes[types_offset] = static_cast<char>(CompressionType::kNone);
+
+        const std::string metadata = bytes.substr(metadata_offset, metadata_size);
+        WriteU64At(bytes, kMetadataChecksumField, XXH64(metadata.data(), metadata.size(), kHashSeed));
+
+        const Status status = fixture.Unpack(bytes);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        // Rejection has to come from block metadata validation, not from the size
+        // check that runs after the unsafe copy.
+        EXPECT_NE(status.error().err_message.find("inconsistent block metadata"), std::string::npos)
+            << status.error().message();
+
+        fixture.Cleanup();
+    }
+
+
     namespace
     {
         struct UnpackPolicyFixture
