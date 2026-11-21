@@ -105,6 +105,7 @@ namespace ctar
         const char* p = buf.data();
         auto status = dst.Deserialize(p, buf.data() + buf.size());
         ASSERT_TRUE(status);
+        ASSERT_TRUE(ValidateDataBlockMeta(dst));
         const size_t deserialize_bytes = p - buf.data();
         EXPECT_EQ(write_len, deserialize_bytes) << "Deserialization consumed different bytes, pointer drift!";
         EXPECT_EQ(dst.hash_value, src.hash_value);
@@ -139,9 +140,17 @@ namespace ctar
         src.Serialize(&buf);
         DataBlockMeta dst;
         const char* p = buf.data();
-        const Status status = dst.Deserialize(p, buf.data() + buf.size());
+        ASSERT_TRUE(dst.Deserialize(p, buf.data() + buf.size()));
+        // The kNone invariant is cross-field, so it is checked after parsing, when the
+        // caller can supply a human-readable path for the message.
+        const auto path_of = [](entry_id_t, entry_id_t) -> std::string { return "dir/a.txt"; };
+        const Status status = ValidateDataBlockMeta(dst, path_of);
         ASSERT_FALSE(status);
         EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("file 'dir/a.txt'"), std::string::npos)
+            << status.error().message();
+        EXPECT_NE(status.error().err_message.find("raw entry stored size 4 != original size 1"), std::string::npos)
+            << status.error().message();
     }
 
     TEST(DataBlobMeta, RejectsUnknownCompressionType)
@@ -160,9 +169,12 @@ namespace ctar
         src.Serialize(&buf);
         DataBlockMeta dst;
         const char* p = buf.data();
-        const Status status = dst.Deserialize(p, buf.data() + buf.size());
+        ASSERT_TRUE(dst.Deserialize(p, buf.data() + buf.size()));
+        const Status status = ValidateDataBlockMeta(dst);
         ASSERT_FALSE(status);
         EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("unknown compression type 127"), std::string::npos)
+            << status.error().message();
     }
 
     TEST(DataBlobMeta, SerializeDeserializeEmptyArrays)

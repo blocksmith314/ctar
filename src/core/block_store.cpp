@@ -1225,6 +1225,23 @@ namespace ctar
             return error_corruption("corrupt archive '{}': data block count {} is impossible", pack_file_path,
                                     data_block_count);
         }
+        // The metadata index is deserialized before the block list, so a corrupt block
+        // can name the offending archive path instead of an internal id.
+        const auto entry_path = [this](entry_id_t dir_id, entry_id_t file_id) -> std::string
+        {
+            const auto file_name = pack_file_handle_.GetFileNameByFileId(file_id);
+            if (!file_name)
+            {
+                return {};
+            }
+            const auto dir_path = pack_file_handle_.GetDirPathByDirId(dir_id);
+            if (!dir_path || dir_path.value().empty())
+            {
+                return std::string(file_name.value());
+            }
+            return std::format("{}/{}", dir_path.value(), file_name.value());
+        };
+
         data_block_metas_.clear();
         data_block_metas_.resize(static_cast<size_t>(data_block_count));
         for (size_t i = 0; i < data_block_metas_.size(); ++i)
@@ -1240,6 +1257,10 @@ namespace ctar
             {
                 return error_corruption("corrupt archive '{}': data block {} lies outside the block region",
                                         pack_file_path, block_meta.block_id);
+            }
+            if (auto valid = ValidateDataBlockMeta(block_meta, entry_path); !valid)
+            {
+                return error_corruption("corrupt archive '{}': {}", pack_file_path, valid.error().message());
             }
             if (auto dir_path = pack_file_handle_.GetDirPathByDirId(block_meta.dir_id))
             {

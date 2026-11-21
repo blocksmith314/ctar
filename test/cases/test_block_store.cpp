@@ -576,6 +576,12 @@ namespace ctar
         pos += static_cast<size_t>(type_count);
         ASSERT_LE(pos, metadata_end);
 
+        // Record the first file's offset so the crafted entry cannot trip the
+        // offset/payload check before the kNone size check under test.
+        const uint64_t offsets_count = read_u64();
+        ASSERT_EQ(offsets_count, file_count);
+        ASSERT_EQ(read_u64(), 0U) << "the crafted entry must be the first file in the block";
+
         // First file: raw storage whose declared payload is larger than the one-byte
         // buffer unpack would allocate for it.
         WriteU64At(bytes, orig_sizes_offset, 1);
@@ -588,9 +594,12 @@ namespace ctar
         const Status status = fixture.Unpack(bytes);
         ASSERT_FALSE(status);
         EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
-        // Rejection has to come from block metadata validation, not from the size
-        // check that runs after the unsafe copy.
-        EXPECT_NE(status.error().err_message.find("inconsistent block metadata"), std::string::npos)
+        // Rejection has to come from the kNone cross-field check, not from the size
+        // check that runs after the unsafe copy. The message names the stored path.
+        EXPECT_NE(status.error().err_message.find("a.txt"), std::string::npos) << status.error().message();
+        EXPECT_NE(status.error().err_message.find("raw entry stored size"), std::string::npos)
+            << status.error().message();
+        EXPECT_NE(status.error().err_message.find("!= original size 1"), std::string::npos)
             << status.error().message();
 
         fixture.Cleanup();
