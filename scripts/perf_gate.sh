@@ -6,14 +6,11 @@
 # workflow rather than arbitrary command execution.
 
 set -euo pipefail
+umask 077
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-tmp_root=/tmp/ctar-perf
-baseline_src="$tmp_root/baseline-src"
-baseline_build="$tmp_root/baseline-build"
 current_build="$repo_root/build-perf"
 current_bin="$current_build/ctar"
-baseline_bin="$baseline_build/ctar"
 
 dataset=""
 runs=5
@@ -31,7 +28,7 @@ Usage: scripts/perf_gate.sh --dataset DIR [options]
   --runs N               hyperfine runs per command (1..20, default 5)
   --mode MODE            pack, unpack or both (default both)
   --ref REF              Baseline git ref (default origin/main)
-  --threads N            Passed to ctar as -t (1..64, default 8)
+  --threads N            Passed to ctar as -t (1..16, default 8)
   --max-regression PCT   Fail when time or peak RSS regresses by more
                          than PCT percent (default 5)
   --clean                Remove the baseline worktree and temp files
@@ -39,7 +36,9 @@ Usage: scripts/perf_gate.sh --dataset DIR [options]
 
 The script builds the current tree and a cached baseline from --ref in
 Release mode, then compares `ctar pack` and `ctar unpack` with hyperfine.
-All artifacts stay under /tmp/ctar-perf; the dataset is never modified.
+Artifacts stay in a private per-user temporary directory; the dataset is
+never modified. A normal build is needed first so that third_party/lz4
+exists.
 EOF
 }
 
@@ -114,12 +113,28 @@ fi
 case "$threads" in
     ''|*[!0-9]*) die "--threads must be an integer" ;;
 esac
-[ "$threads" -ge 1 ] && [ "$threads" -le 64 ] || die "--threads must be between 1 and 64"
+[ "$threads" -ge 1 ] && [ "$threads" -le 16 ] || die "--threads must be between 1 and 16"
 awk -v v="$max_regression" 'BEGIN { exit (v ~ /^[0-9]+([.][0-9]+)?$/ ? 0 : 1) }' \
     || die "--max-regression must be a non-negative number"
 case "$dataset" in
     *$'\n'*) die "dataset path must not contain a newline" ;;
 esac
+
+# Keep everything in a per-user directory. A predictable /tmp path could be
+# pre-created by another user (or replaced with a symlink) and is shared by
+# concurrent runs; the ownership check and 0700 mode rule that out.
+tmp_base=${TMPDIR:-/tmp}
+tmp_base=${tmp_base%/}
+tmp_root="$tmp_base/ctar-perf-$(id -u)"
+mkdir -p "$tmp_root"
+[ -d "$tmp_root" ] && [ ! -L "$tmp_root" ] || die "$tmp_root is not a regular directory"
+[ -O "$tmp_root" ] || die "$tmp_root is not owned by the current user"
+chmod 700 "$tmp_root" 2>/dev/null || die "cannot restrict permissions on $tmp_root"
+# git prints worktree paths with symlinks resolved; use the same form.
+tmp_root=$(cd "$tmp_root" && pwd -P)
+baseline_src="$tmp_root/baseline-src"
+baseline_build="$tmp_root/baseline-build"
+baseline_bin="$baseline_build/ctar"
 
 for tool in cmake ninja hyperfine jq git; do
     command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"
@@ -128,7 +143,8 @@ done
 baseline_commit=$(git -C "$repo_root" rev-parse --verify "$ref^{commit}" 2>/dev/null) \
     || die "cannot resolve ref: $ref"
 current_commit=$(git -C "$repo_root" rev-parse --verify HEAD)
-mkdir -p "$tmp_root"
+git -C "$repo_root" merge-base --is-ancestor "$baseline_commit" "$current_commit" \
+    || die "baseline $ref ($baseline_commit) is not an ancestor of HEAD ($current_commit)"
 
 build_current() {
     cmake -S "$repo_root" -B "$current_build" -G Ninja \
@@ -147,10 +163,14 @@ build_baseline() {
         reuse=1
     fi
     if [ "$reuse" -eq 0 ]; then
+        # Drop registrations whose directory vanished (interrupted --clean,
+        # reboot, manual rm) before deciding what to do with the path.
+        git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
         if git -C "$repo_root" worktree list --porcelain | grep -Fqx "worktree $baseline_src"; then
             git -C "$repo_root" worktree remove --force "$baseline_src" >/dev/null
         elif [ -e "$baseline_src" ]; then
-            die "$baseline_src exists and is not a registered worktree"
+            # Leftover under our owner-checked temp root; safe to replace.
+            rm -rf "$baseline_src"
         fi
         git -C "$repo_root" worktree add --detach "$baseline_src" "$baseline_commit" >/dev/null
     fi
@@ -195,6 +215,11 @@ compare() {
     local json=$1
     local label=$2
     local base_mean branch_mean base_mem branch_mem
+    for index in 0 1; do
+        jq -e --argjson i "$index" '.results[$i].summary.time_wall_clock.mean | numbers' "$json" >/dev/null &&
+            jq -e --argjson i "$index" '.results[$i].summary.memory_peak_resident.mean | numbers' "$json" >/dev/null ||
+            die "hyperfine JSON lacks time_wall_clock or memory_peak_resident (hyperfine >= 2.0 required)"
+    done
     base_mean=$(jq -r '.results[0].summary.time_wall_clock.mean' "$json")
     branch_mean=$(jq -r '.results[1].summary.time_wall_clock.mean' "$json")
     base_mem=$(jq -r '.results[0].summary.memory_peak_resident.mean' "$json")
@@ -250,10 +275,12 @@ fi
 rm -rf "$out_base" "$out_branch" "$tmp_root/current.ctar"
 
 if [ "$clean" -eq 1 ]; then
+    git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
     if git -C "$repo_root" worktree list --porcelain | grep -Fqx "worktree $baseline_src"; then
         git -C "$repo_root" worktree remove --force "$baseline_src" >/dev/null
     fi
     rm -rf "$tmp_root"
+    git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
 fi
 
 if [ "$failed" -ne 0 ]; then

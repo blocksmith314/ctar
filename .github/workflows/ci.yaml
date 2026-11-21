@@ -167,3 +167,12 @@ jobs:
         if: failure()
         working-directory: build
         run: cat Testing/Temporary/LastTest.log
+
+  script-check:
+    name: Shell script syntax
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: bash -n scripts/perf_gate.sh
