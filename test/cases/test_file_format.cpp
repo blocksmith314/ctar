@@ -87,12 +87,13 @@ namespace ctar
         src.dir_id = 2;
         src.file_ids = {10, 11, 12};
         src.file_orig_sizes = {100, 200, 300};
-        src.file_compressed_sizes = {50, 100, 150};
+        // A kNone entry stores the file verbatim, so its stored size equals the original.
+        src.file_compressed_sizes = {50, 100, 300};
         src.file_compressed_types = {CompressionType::kLZ4, CompressionType::kLZ4HC, CompressionType::kNone};
         src.file_offsets = {0, 100, 200};
         src.file_hashes = {0x12, 0x34, 0x56};
         src.block_file_offset = 0;
-        src.payload_size = 350;
+        src.payload_size = 500;
         src.block_size = 4096;
         std::string buf;
         src.Serialize(&buf);
@@ -104,6 +105,7 @@ namespace ctar
         const char* p = buf.data();
         auto status = dst.Deserialize(p, buf.data() + buf.size());
         ASSERT_TRUE(status);
+        ASSERT_TRUE(ValidateDataBlockMeta(dst));
         const size_t deserialize_bytes = p - buf.data();
         EXPECT_EQ(write_len, deserialize_bytes) << "Deserialization consumed different bytes, pointer drift!";
         EXPECT_EQ(dst.hash_value, src.hash_value);
@@ -119,6 +121,61 @@ namespace ctar
         EXPECT_EQ(dst.block_size, src.block_size);
     }
 
+
+    TEST(DataBlobMeta, RejectsNoneEntryWithMismatchedSizes)
+    {
+        // A kNone entry stores the file verbatim; a stored size larger than the
+        // original would make unpack copy past the decompression buffer.
+        DataBlockMeta src;
+        src.file_ids = {1};
+        src.file_orig_sizes = {1};
+        src.file_compressed_sizes = {4};
+        src.file_compressed_types = {CompressionType::kNone};
+        src.file_offsets = {0};
+        src.file_hashes = {0};
+        src.payload_size = 4;
+        src.block_size = 4;
+
+        std::string buf;
+        src.Serialize(&buf);
+        DataBlockMeta dst;
+        const char* p = buf.data();
+        ASSERT_TRUE(dst.Deserialize(p, buf.data() + buf.size()));
+        // The kNone invariant is cross-field, so it is checked after parsing, when the
+        // caller can supply a human-readable path for the message.
+        const auto path_of = [](entry_id_t, entry_id_t) -> std::string { return "dir/a.txt"; };
+        const Status status = ValidateDataBlockMeta(dst, path_of);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("file 'dir/a.txt'"), std::string::npos)
+            << status.error().message();
+        EXPECT_NE(status.error().err_message.find("raw entry stored size 4 != original size 1"), std::string::npos)
+            << status.error().message();
+    }
+
+    TEST(DataBlobMeta, RejectsUnknownCompressionType)
+    {
+        DataBlockMeta src;
+        src.file_ids = {1};
+        src.file_orig_sizes = {4};
+        src.file_compressed_sizes = {4};
+        src.file_compressed_types = {static_cast<CompressionType>(0x7F)};
+        src.file_offsets = {0};
+        src.file_hashes = {0};
+        src.payload_size = 4;
+        src.block_size = 4;
+
+        std::string buf;
+        src.Serialize(&buf);
+        DataBlockMeta dst;
+        const char* p = buf.data();
+        ASSERT_TRUE(dst.Deserialize(p, buf.data() + buf.size()));
+        const Status status = ValidateDataBlockMeta(dst);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("unknown compression type 127"), std::string::npos)
+            << status.error().message();
+    }
 
     TEST(DataBlobMeta, SerializeDeserializeEmptyArrays)
     {

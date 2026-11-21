@@ -38,9 +38,9 @@ namespace
         return error_corruption("corrupt archive: metadata is truncated");
     }
 
-    [[nodiscard]] Status CorruptBlockMeta()
+    [[nodiscard]] Status CorruptBlockMeta(std::string_view detail)
     {
-        return error_corruption("corrupt archive: inconsistent block metadata");
+        return error_corruption("corrupt archive: {}", detail);
     }
 
     [[nodiscard]] Status ReadFixed64(const char*& ptr, const char* end, uint64_t& value)
@@ -290,7 +290,9 @@ namespace
             }
             if (count != file_count)
             {
-                return CorruptBlockMeta();
+                return CorruptBlockMeta(
+                    std::format("block {}: per-file vector count {} does not match file count {}", block_id, count,
+                                file_count));
             }
             if (count > static_cast<uint64_t>(end - ptr) / sizeof(uint64_t))
             {
@@ -322,7 +324,8 @@ namespace
         }
         if (type_count != file_count || type_count > static_cast<uint64_t>(end - ptr))
         {
-            return CorruptBlockMeta();
+            return CorruptBlockMeta(std::format("block {}: compression type count {} is invalid for file count {}",
+                                                block_id, type_count, file_count));
         }
         file_compressed_types.resize(static_cast<size_t>(type_count));
         for (CompressionType& type : file_compressed_types)
@@ -340,19 +343,8 @@ namespace
             return s;
         }
 
-        // The block has to be internally consistent: the payload has to fit in the block
-        // and every compressed file has to fit in the payload.
-        if (payload_size > block_size)
-        {
-            return CorruptBlockMeta();
-        }
-        for (size_t i = 0; i < file_ids.size(); ++i)
-        {
-            if (file_offsets[i] > payload_size || file_compressed_sizes[i] > payload_size - file_offsets[i])
-            {
-                return CorruptBlockMeta();
-            }
-        }
+        // Cross-field invariants (payload bounds, kNone sizes, compression types) are
+        // checked by ValidateDataBlockMeta() once the caller can name the failing entry.
         return {};
     }
 
@@ -362,6 +354,70 @@ namespace
                            "file_id_sizes:{},file_xxhash.size(), serialize_size:{}",
                            block_id, block_size, block_file_offset, dir_id, file_ids.size(), file_hashes.size(),
                            SerializedSize());
+    }
+
+    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of)
+    {
+        const size_t file_count = block_meta.file_ids.size();
+        // Every per-file vector is indexed below, so guard the shape first: this
+        // function is public and must not read past a short vector.
+        if (block_meta.file_orig_sizes.size() != file_count ||
+            block_meta.file_compressed_sizes.size() != file_count ||
+            block_meta.file_compressed_types.size() != file_count || block_meta.file_offsets.size() != file_count ||
+            block_meta.file_hashes.size() != file_count)
+        {
+            return error_corruption("block {}: per-file vectors have different lengths", block_meta.block_id);
+        }
+
+        // The stored path is resolved only when there is an error to report, so valid
+        // blocks pay no lookup cost. When it is unavailable, fall back to the entry's
+        // position in the block instead of an opaque file id.
+        const auto entry_label = [&](size_t index) -> std::string
+        {
+            if (path_of)
+            {
+                const std::string path = path_of(block_meta.dir_id, block_meta.file_ids[index]);
+                if (!path.empty())
+                {
+                    return std::format("file '{}'", path);
+                }
+            }
+            return std::format("block {} entry {}", block_meta.block_id, index);
+        };
+
+        if (block_meta.payload_size > block_meta.block_size)
+        {
+            return error_corruption("block {}: payload size {} exceeds block size {}", block_meta.block_id,
+                                    block_meta.payload_size, block_meta.block_size);
+        }
+        for (size_t i = 0; i < file_count; ++i)
+        {
+            if (block_meta.file_offsets[i] > block_meta.payload_size ||
+                block_meta.file_compressed_sizes[i] > block_meta.payload_size - block_meta.file_offsets[i])
+            {
+                return error_corruption("{}: offset {} + stored size {} exceeds payload size {}", entry_label(i),
+                                        block_meta.file_offsets[i], block_meta.file_compressed_sizes[i],
+                                        block_meta.payload_size);
+            }
+            switch (block_meta.file_compressed_types[i])
+            {
+            case CompressionType::kNone:
+                // Raw data is copied verbatim, so the stored size is the original size.
+                if (block_meta.file_compressed_sizes[i] != block_meta.file_orig_sizes[i])
+                {
+                    return error_corruption("{}: raw entry stored size {} != original size {}", entry_label(i),
+                                            block_meta.file_compressed_sizes[i], block_meta.file_orig_sizes[i]);
+                }
+                break;
+            case CompressionType::kLZ4:
+            case CompressionType::kLZ4HC:
+                break;
+            default:
+                return error_corruption("{}: unknown compression type {}", entry_label(i),
+                                        static_cast<uint32_t>(block_meta.file_compressed_types[i]));
+            }
+        }
+        return {};
     }
 
     PackFileMeta::PackFileMeta()

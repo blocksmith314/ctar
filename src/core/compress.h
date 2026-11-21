@@ -89,6 +89,12 @@ namespace ctar
                 }
             case CompressionType::kNone:
                 {
+                    // Raw data is a straight copy. Refuse a copy larger than the
+                    // caller's buffer so a corrupt archive cannot write past it.
+                    if (compressed_size > dst_capacity)
+                    {
+                        return 0;
+                    }
                     std::memcpy(dst, src, compressed_size);
                     return compressed_size;
                 }

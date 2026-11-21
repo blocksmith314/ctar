@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <numeric>
 #include <ostream>
 #include <ranges>
@@ -512,8 +513,28 @@ namespace ctar
         [[nodiscard]] size_t SerializedSize() const;
         friend class BlockStore;
         void Serialize(std::string* dst) const;
+        // Structural parsing only. Callers must run ValidateDataBlockMeta() before
+        // indexing the per-file vectors or unpacking the block.
         Status Deserialize(const char*& ptr, const char* end);
         [[nodiscard]] std::string DebugString() const;
     };
+
+    /// Resolves the stored path of a file entry for diagnostics. The first argument is
+    /// the block's dir_id and the second the file id. An empty result means the name is
+    /// unavailable (for example a crafted archive whose id has no entry).
+    using EntryPathResolver = std::function<std::string(entry_id_t dir_id, entry_id_t file_id)>;
+
+    /// @brief Validate cross-field invariants of a deserialized data block.
+    ///
+    /// DataBlockMeta::Deserialize enforces only structural consistency (vector lengths
+    /// and bounds inside the metadata region). This checks that the values describe a
+    /// block unpack can safely process: every stored range fits in the payload, a kNone
+    /// entry stores exactly its original size, and compression types are known.
+    ///
+    /// @param block_meta block to validate
+    /// @param path_of optional resolver used only to name the failing entry in error
+    ///                messages; valid blocks never call it
+    /// @return Ok on success, kCorruption otherwise
+    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of = {});
 }; // namespace ctar
 #endif // CTAR_FORMAT_H

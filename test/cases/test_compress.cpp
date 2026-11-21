@@ -97,6 +97,25 @@ namespace ctar
         ASSERT_EQ(compressed_size, 0);
     }
 
+    TEST(CompressTest, NoneDecompressRejectsOversizedCopy)
+    {
+        const char src[4] = {'a', 'b', 'c', 'd'};
+        char dst[2] = {};
+        // Raw data is a memcpy; a source larger than the destination must be refused
+        // instead of overflowing it.
+        EXPECT_EQ(compress::Decompress(CompressionType::kNone, src, dst, sizeof(src), sizeof(dst)), 0U);
+        EXPECT_EQ(dst[0], '\0');
+        EXPECT_EQ(dst[1], '\0');
+    }
+
+    TEST(CompressTest, NoneDecompressCopiesWhenSizesMatch)
+    {
+        const char src[4] = {'a', 'b', 'c', 'd'};
+        char dst[4] = {};
+        EXPECT_EQ(compress::Decompress(CompressionType::kNone, src, dst, sizeof(src), sizeof(dst)), sizeof(src));
+        EXPECT_EQ(std::string(dst, sizeof(dst)), std::string(src, sizeof(src)));
+    }
+
     TEST(CompressTest, MaxCompressBufferSizeAboveLz4InputLimit)
     {
         // Sizes past LZ4_MAX_INPUT_SIZE used to wrap through LZ4's int-based API and
