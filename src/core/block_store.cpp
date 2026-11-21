@@ -1,3 +1,4 @@
+#include <chrono>
 #include <expected>
 #include <fstream>
 #include <grp.h>
@@ -22,6 +23,23 @@ namespace ctar
 #ifndef O_BINARY
 #define O_BINARY 0
 #endif
+
+    namespace
+    {
+        uint64_t CurrentTimeMillis()
+        {
+            return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+        }
+
+        bool IsValidCompressionType(const uint64_t type)
+        {
+            return type == static_cast<uint64_t>(CompressionType::kNone) ||
+                type == static_cast<uint64_t>(CompressionType::kLZ4) ||
+                type == static_cast<uint64_t>(CompressionType::kLZ4HC);
+        }
+    } // namespace
 
 
     ResultStatus<uint64_t> Hash(const std::string& file_path)
@@ -274,7 +292,7 @@ namespace ctar
                     last_write_block_id_ = pending.block_id;
                     auto& task = data_block_metas_[pending.block_id];
                     task.block_file_offset = block_region_size_;
-                    total_compressed_size_ += std::accumulate(task.file_compressed_sizes.begin(),
+                    file_data_compressed_size_ += std::accumulate(task.file_compressed_sizes.begin(),
                                                               task.file_compressed_sizes.end(), size_t{0});
                     // A block whose files are all empty has no payload at all; writing a
                     // zero-length iovec for it would only waste a syscall.
@@ -288,7 +306,7 @@ namespace ctar
                 if (!iovs.empty())
                 {
                     write_status = w_file->RandomWriteV(iovs.data(), static_cast<int>(iovs.size()),
-                                                        meta_region_size_ + batch_start);
+                                                        file_data_offset_ + batch_start);
                 }
                 if (!write_status)
                 {
@@ -435,7 +453,7 @@ namespace ctar
             }
             read_file_ptr = std::move(read_file_status.value());
         }
-        uint64_t block_beg_pos = meta_region_size_ + block_meta.block_file_offset;
+        uint64_t block_beg_pos = file_data_offset_ + block_meta.block_file_offset;
         tls_block_buf.EnsureCapacity(block_meta.block_size);
         struct TrimBlockBufferOnExit
         {
@@ -656,6 +674,11 @@ namespace ctar
             return error_io("fail to open {}: {} ", output_pack_file, strerror(errno));
         }
         auto& write_file = write_file_status.value();
+        block_region_size_ = 0;
+        max_block_region_size_ = 0;
+        file_data_compressed_size_ = 0;
+        last_write_block_id_ = 0;
+        data_block_metas_.clear();
         Status status = BuildBlocksFromFileStats();
         if (!status)
         {
@@ -663,9 +686,28 @@ namespace ctar
         }
 
         packed_file_ = output_pack_file;
-        auto raw_meta_size = GetMetaSize();
-        meta_region_size_ = next_4k_align(raw_meta_size);
-        if (!write_file->Preallocate(static_cast<size_t>(meta_region_size_ + max_block_region_size_)))
+        const uint64_t pack_begin_time = CurrentTimeMillis();
+        const uint64_t raw_meta_size = GetRawMetaSize();
+        const CompressionType file_data_type = compression_config_.compression_type;
+        const int compression_param = compression_config_.compression_param;
+
+        // metadata follows the file-data compression strategy, except that it is only
+        // compressed when it reaches the threshold.
+        const bool compress_metadata =
+            file_data_type != CompressionType::kNone && raw_meta_size >= kMetadataCompressionThreshold;
+        const CompressionType metadata_type = compress_metadata ? file_data_type : CompressionType::kNone;
+        const uint64_t max_metadata_size =
+            compress_metadata ? compress::MaxCompressBufferSize(metadata_type, raw_meta_size) : raw_meta_size;
+
+        legacy_layout_ = false;
+        file_data_offset_ = PackFileHeader::kSerializedSize;
+        metadata_original_size_ = raw_meta_size;
+        metadata_compressed_size_ = raw_meta_size;
+        metadata_compressed_type_ = static_cast<uint64_t>(CompressionType::kNone);
+        metadata_checksum_ = 0;
+        const uint64_t max_file_size =
+            file_data_offset_ + max_block_region_size_ + max_metadata_size + sizeof(kMagicNumber);
+        if (!write_file->Preallocate(static_cast<size_t>(max_file_size)))
         {
             return error_io("fail to preallocate compressed file {}: {}", output_pack_file, strerror(errno));
         }
@@ -704,34 +746,10 @@ namespace ctar
             return std::unexpected(*writer_error_);
         }
 
-
-        if (block_region_size_ < max_block_region_size_)
-        {
-            if (!write_file->TruncFile(static_cast<off_t>(meta_region_size_ + block_region_size_)))
-            {
-                fs::remove(output_pack_file);
-                return error_io("fail to truncate compressed file {}: {}", output_pack_file, strerror(errno));
-            }
-        }
-        else
-        {
-            block_region_size_ = max_block_region_size_;
-        }
-        std::string magic_number;
-        magic_number.reserve(sizeof(kMagicNumber));
-        PutFixed32(&magic_number, kMagicNumber);
-        status =
-            write_file->RandomWrite(meta_region_size_ + block_region_size_, sizeof(kMagicNumber), magic_number.data());
-        if (!status)
-        {
-            fs::remove(output_pack_file);
-            return status;
-        }
-
         for (auto& task : data_block_metas_)
         {
             uint64_t index = 0;
-            auto beg_pos = static_cast<off_t>(meta_region_size_ + task.block_file_offset);
+            auto beg_pos = static_cast<off_t>(file_data_offset_ + task.block_file_offset);
             for (const entry_id_t& file_id : task.file_ids)
             {
                 pack_file_handle_.SetFileEntryMeta(file_id, task.block_id, beg_pos + task.file_offsets[index],
@@ -739,33 +757,101 @@ namespace ctar
                 index += 1;
             }
         }
-        pack_file_handle_.SetCompressedAndPaddingBytes(total_compressed_size_, block_region_size_);
-        std::string buffer;
-        buffer.reserve(meta_region_size_);
-        const uint64_t file_meta_size = meta_region_size_ - sizeof(PackFileHeader);
-        pack_file_header_.file_meta_size = file_meta_size;
-        // serialize meta 1: PackFileHeader
-        pack_file_header_.Serialize(&buffer);
-        // serialize meta 2: PackFileHandle
-        pack_file_handle_.SerializePackFileMeta(&buffer);
-        // serialize meta 3: count of data block
-        PutFixed64(&buffer, data_block_metas_.size());
-        // serialize meta 4: DataBlockMeta
+        pack_file_handle_.SetCompressedAndPaddingBytes(file_data_compressed_size_, block_region_size_);
+
+        // Serialize the metadata (without a header; the header is fixed-size at the front).
+        std::string meta_buffer;
+        meta_buffer.reserve(static_cast<size_t>(raw_meta_size));
+        pack_file_handle_.SerializePackFileMeta(&meta_buffer);
+        PutFixed64(&meta_buffer, data_block_metas_.size());
         for (const auto& meta : data_block_metas_)
         {
-            meta.Serialize(&buffer);
+            meta.Serialize(&meta_buffer);
         }
-        // Grow the buffer to the aligned region size so its size matches what is
-        // written; resize() zero-fills the tail, which also keeps the padding defined
-        // (an archive must not contain uninitialised bytes).
-        buffer.resize(meta_region_size_);
-        const auto total_size = static_cast<ssize_t>(meta_region_size_);
+        if (meta_buffer.size() != raw_meta_size)
+        {
+            fs::remove(output_pack_file);
+            return error_run_time("internal error: metadata size {} does not match the precomputed {}", meta_buffer.size(),
+                                  raw_meta_size);
+        }
+        metadata_checksum_ = XXH64(meta_buffer.data(), meta_buffer.size(), kHashSeed);
 
-        status = write_file->Write(total_size, buffer.data());
+        std::string stored_meta = meta_buffer;
+        if (compress_metadata)
+        {
+            stored_meta.assign(static_cast<size_t>(max_metadata_size), '\0');
+            const uint64_t compressed_size = compress::Compress(metadata_type, meta_buffer.data(), stored_meta.data(),
+                                                                raw_meta_size, compression_param);
+            if (compressed_size > 0 && compressed_size < raw_meta_size)
+            {
+                stored_meta.resize(static_cast<size_t>(compressed_size));
+                metadata_compressed_size_ = compressed_size;
+                metadata_compressed_type_ = static_cast<uint64_t>(metadata_type);
+            }
+            else
+            {
+                // Compression did not help; keep the uncompressed bytes.
+                stored_meta = meta_buffer;
+            }
+        }
+
+        const uint64_t metadata_offset = file_data_offset_ + block_region_size_;
+        const uint64_t pack_file_size = metadata_offset + metadata_compressed_size_ + sizeof(kMagicNumber);
+        archive_size_ = pack_file_size;
+
+        const auto file_stats = pack_file_handle_.GetFileStats();
+        PackFileHeader header;
+        header.magic_number = kMagicNumber;
+        header.file_format_version = kFileFormatVersion;
+        header.ctar_version = kToolVersion.Encode();
+        header.compressed_param = static_cast<uint32_t>(compression_param);
+        header.pack_begin_time = pack_begin_time;
+        header.pack_end_time = CurrentTimeMillis();
+        header.pack_file_size = pack_file_size;
+        header.file_count = file_stats.file_count;
+        header.directory_count = pack_file_handle_.GetDirectoryCount();
+        header.block_count = data_block_metas_.size();
+        header.file_data_offset = file_data_offset_;
+        header.file_data_original_size = file_stats.file_data_original_size;
+        header.file_data_compressed_size = file_data_compressed_size_;
+        header.file_data_compressed_type = static_cast<uint64_t>(file_data_type);
+        header.metadata_offset = metadata_offset;
+        header.metadata_original_size = metadata_original_size_;
+        header.metadata_compressed_size = metadata_compressed_size_;
+        header.metadata_compressed_type = metadata_compressed_type_;
+        header.metadata_checksum = metadata_checksum_;
+        pack_file_header_ = header;
+
+        std::string header_bytes;
+        header.Serialize(&header_bytes);
+        status = write_file->RandomWrite(0, header_bytes.size(), header_bytes.data());
         if (!status)
         {
             fs::remove(output_pack_file);
             return status;
+        }
+        if (!stored_meta.empty())
+        {
+            status = write_file->RandomWrite(static_cast<off_t>(metadata_offset), stored_meta.size(), stored_meta.data());
+            if (!status)
+            {
+                fs::remove(output_pack_file);
+                return status;
+            }
+        }
+        std::string magic_number;
+        PutFixed32(&magic_number, kMagicNumber);
+        status = write_file->RandomWrite(static_cast<off_t>(metadata_offset + metadata_compressed_size_),
+                                         sizeof(kMagicNumber), magic_number.data());
+        if (!status)
+        {
+            fs::remove(output_pack_file);
+            return status;
+        }
+        if (!write_file->TruncFile(static_cast<off_t>(pack_file_size)))
+        {
+            fs::remove(output_pack_file);
+            return error_io("fail to truncate compressed file {}: {}", output_pack_file, strerror(errno));
         }
         if (!write_file->Sync())
         {
@@ -911,7 +997,7 @@ namespace ctar
         return {};
     }
 
-    Status BlockStore::RestoreBlocksFromPack(const std::string& pack_file_path)
+    Status BlockStore::ReadPackHeaderOnly(const std::string& pack_file_path)
     {
         packed_file_ = pack_file_path;
         auto read_file_status = NewPosixReadFile(pack_file_path);
@@ -920,55 +1006,213 @@ namespace ctar
             return error_io("fail to open file {}: {}", pack_file_path, strerror(errno));
         }
         auto& read_file = read_file_status.value();
-        Status s;
         const auto file_size_status = read_file->GetFileSize();
         if (!file_size_status)
         {
             return error_io("fail to get the size of {}: {}", pack_file_path, file_size_status.error().message());
         }
         const uint64_t file_size = file_size_status.value();
-        if (file_size < sizeof(PackFileHeader))
+        archive_size_ = file_size;
+        if (file_size < LegacyPackFileHeader::kSerializedSize)
         {
             return error_corruption("'{}' is too small to be a ctar archive", pack_file_path);
         }
 
-        std::string header(sizeof(PackFileHeader), '\0');
-        size_t header_size = header.size();
-        auto read_status = read_file->Read(header_size, header.data());
-        if (!read_status || read_status.value() != header_size)
+        std::string prefix(LegacyPackFileHeader::kSerializedSize, '\0');
+        auto read_status = read_file->Read(prefix.size(), prefix.data());
+        if (!read_status || read_status.value() != prefix.size())
         {
             return error_io("fail to read data from {}", pack_file_path);
         }
-        const char* ptr = header.data();
-        PackFileHeader file_header{};
-        s = file_header.Deserialize(ptr, header.data() + header.size());
+        const uint32_t magic = DecodeFixed32(prefix.data());
+        if (magic != kMagicNumber)
+        {
+            return error_corruption("Invalid magic number");
+        }
+        const Version version = Version::Decode(DecodeFixed32(prefix.data() + sizeof(uint32_t)));
+        if (version.major > kFileFormatVersion.major ||
+            (version.major == kFileFormatVersion.major && version.minor > kFileFormatVersion.minor))
+        {
+            return error_corruption("archive format {} is newer than the supported {}",
+                                    version.to_string(), kFileFormatVersion.to_string());
+        }
+
+        if (version.major == kFileFormatVersion.major && version.minor == kFileFormatVersion.minor)
+        {
+            // 1.1.0: fixed 4096-byte header, metadata at the end.
+            if (file_size < PackFileHeader::kSerializedSize)
+            {
+                return error_corruption("'{}' is too small for a 1.1.0 archive", pack_file_path);
+            }
+            std::string header_bytes(PackFileHeader::kSerializedSize, '\0');
+            read_status = read_file->RandomRead(0, header_bytes.size(), header_bytes.data());
+            if (!read_status || read_status.value() != header_bytes.size())
+            {
+                return error_io("fail to read header from {}", pack_file_path);
+            }
+            PackFileHeader header;
+            Status s = header.Deserialize(header_bytes.data(), header_bytes.data() + header_bytes.size());
+            if (!s)
+            {
+                return s;
+            }
+            for (size_t i = PackFileHeader::kUsedSize; i < header_bytes.size(); ++i)
+            {
+                if (header_bytes[i] != 0)
+                {
+                    return error_corruption("corrupt archive '{}': header reserved bytes are not zero",
+                                            pack_file_path);
+                }
+            }
+            if (header.file_data_offset != PackFileHeader::kSerializedSize)
+            {
+                return error_corruption("corrupt archive '{}': file data offset {} is not {}", pack_file_path,
+                                        header.file_data_offset, PackFileHeader::kSerializedSize);
+            }
+            if (header.metadata_offset != header.file_data_offset + header.file_data_compressed_size)
+            {
+                return error_corruption("corrupt archive '{}': metadata offset does not follow the file data",
+                                        pack_file_path);
+            }
+            if (header.pack_file_size != file_size)
+            {
+                return error_corruption("corrupt archive '{}': header size {} does not match the file size {}",
+                                        pack_file_path, header.pack_file_size, file_size);
+            }
+            if (header.file_data_compressed_size > file_size || header.metadata_offset > file_size ||
+                file_size - header.metadata_offset < sizeof(kMagicNumber) ||
+                header.metadata_compressed_size > file_size - header.metadata_offset - sizeof(kMagicNumber))
+            {
+                return error_corruption("corrupt archive '{}': metadata size {} exceeds the file size {}",
+                                        pack_file_path, header.metadata_compressed_size, file_size);
+            }
+            // Bound the allocation for a maliciously large uncompressed metadata size.
+            constexpr uint64_t kMaxMetadataSize = 4ULL * 1024 * 1024 * 1024;
+            if (header.metadata_original_size == 0 || header.metadata_original_size > kMaxMetadataSize ||
+                header.metadata_compressed_size == 0)
+            {
+                return error_corruption("corrupt archive '{}': impossible metadata sizes", pack_file_path);
+            }
+            if (header.metadata_compressed_type != static_cast<uint64_t>(CompressionType::kNone) &&
+                header.metadata_original_size / header.metadata_compressed_size > 255)
+            {
+                return error_corruption("corrupt archive '{}': impossible metadata compression ratio", pack_file_path);
+            }
+            if (!IsValidCompressionType(header.file_data_compressed_type) ||
+                !IsValidCompressionType(header.metadata_compressed_type))
+            {
+                return error_corruption("corrupt archive '{}': invalid compression type", pack_file_path);
+            }
+            if (header.metadata_compressed_type == static_cast<uint64_t>(CompressionType::kNone) &&
+                header.metadata_compressed_size != header.metadata_original_size)
+            {
+                return error_corruption("corrupt archive '{}': uncompressed metadata size mismatch", pack_file_path);
+            }
+            legacy_layout_ = false;
+            pack_file_header_ = header;
+            file_data_offset_ = header.file_data_offset;
+            block_region_size_ = header.file_data_compressed_size;
+            metadata_original_size_ = header.metadata_original_size;
+            metadata_compressed_size_ = header.metadata_compressed_size;
+            metadata_compressed_type_ = header.metadata_compressed_type;
+            metadata_checksum_ = header.metadata_checksum;
+            return {};
+        }
+
+        // 1.0.0 and older: 16-byte header, metadata follows it.
+        const char* ptr = prefix.data();
+        LegacyPackFileHeader header;
+        Status s = header.Deserialize(ptr, prefix.data() + prefix.size());
         if (!s)
         {
             return s;
         }
-        // The metadata region cannot be larger than the file itself; without this check a
-        // corrupt header makes the reader allocate and read an arbitrary size.
-        if (file_header.file_meta_size > file_size - sizeof(PackFileHeader))
+        if (header.file_meta_size > file_size - LegacyPackFileHeader::kSerializedSize)
         {
             return error_corruption("corrupt archive '{}': metadata size {} exceeds the file size {}", pack_file_path,
-                                    file_header.file_meta_size, file_size);
+                                    header.file_meta_size, file_size);
         }
-        meta_region_size_ = file_header.file_meta_size + sizeof(PackFileHeader);
-        std::string file_meta(static_cast<size_t>(file_header.file_meta_size), '\0');
-        read_status =
-            read_file->RandomRead(static_cast<off_t>(header_size), file_header.file_meta_size, file_meta.data());
-        if (!read_status || read_status.value() != static_cast<size_t>(file_header.file_meta_size))
+        legacy_layout_ = true;
+        pack_file_header_ = PackFileHeader{};
+        legacy_file_meta_size_ = header.file_meta_size;
+        meta_region_size_ = LegacyPackFileHeader::kSerializedSize + header.file_meta_size;
+        file_data_offset_ = meta_region_size_;
+        metadata_original_size_ = header.file_meta_size;
+        metadata_compressed_size_ = header.file_meta_size;
+        metadata_compressed_type_ = static_cast<uint64_t>(CompressionType::kNone);
+        metadata_checksum_ = 0;
+        block_region_size_ = file_size - meta_region_size_;
+        return {};
+    }
+
+    Status BlockStore::RestoreBlocksFromPack(const std::string& pack_file_path)
+    {
+        Status s = ReadPackHeaderOnly(pack_file_path);
+        if (!s)
         {
-            return error_io("fail to read data from {}: {}", pack_file_path, strerror(errno));
+            return s;
         }
-        const char* meta_ptr = file_meta.data();
-        const char* const meta_end = file_meta.data() + file_meta.size();
+        auto read_file_status = NewPosixReadFile(pack_file_path);
+        if (!read_file_status)
+        {
+            return error_io("fail to open file {}: {}", pack_file_path, strerror(errno));
+        }
+        auto& read_file = read_file_status.value();
+
+        std::string metadata_bytes;
+        if (legacy_layout_)
+        {
+            metadata_bytes.assign(static_cast<size_t>(legacy_file_meta_size_), '\0');
+            auto read_status =
+                read_file->RandomRead(static_cast<off_t>(LegacyPackFileHeader::kSerializedSize),
+                                      legacy_file_meta_size_, metadata_bytes.data());
+            if (!read_status || read_status.value() != static_cast<size_t>(legacy_file_meta_size_))
+            {
+                return error_io("fail to read metadata from {}", pack_file_path);
+            }
+        }
+        else
+        {
+            std::string stored(static_cast<size_t>(metadata_compressed_size_), '\0');
+            if (!stored.empty())
+            {
+                auto read_status = read_file->RandomRead(static_cast<off_t>(pack_file_header_.metadata_offset),
+                                                         metadata_compressed_size_, stored.data());
+                if (!read_status || read_status.value() != static_cast<size_t>(metadata_compressed_size_))
+                {
+                    return error_io("fail to read metadata from {}", pack_file_path);
+                }
+            }
+            const auto metadata_type = static_cast<CompressionType>(metadata_compressed_type_);
+            if (metadata_type == CompressionType::kNone)
+            {
+                metadata_bytes = std::move(stored);
+            }
+            else
+            {
+                metadata_bytes.assign(static_cast<size_t>(metadata_original_size_), '\0');
+                const uint64_t decompressed_size =
+                    compress::Decompress(metadata_type, stored.data(), metadata_bytes.data(),
+                                         metadata_compressed_size_, metadata_original_size_);
+                if (decompressed_size != metadata_original_size_)
+                {
+                    return error_corruption("corrupt archive '{}': failed to decompress metadata", pack_file_path);
+                }
+            }
+            const uint64_t checksum = XXH64(metadata_bytes.data(), metadata_bytes.size(), kHashSeed);
+            if (checksum != metadata_checksum_)
+            {
+                return error_corruption("corrupt archive '{}': metadata checksum mismatch", pack_file_path);
+            }
+        }
+
+        const char* meta_ptr = metadata_bytes.data();
+        const char* const meta_end = metadata_bytes.data() + metadata_bytes.size();
         s = pack_file_handle_.DeserializePackFileMeta(meta_ptr, meta_end);
         if (!s)
         {
             return s;
         }
-
         if (static_cast<size_t>(meta_end - meta_ptr) < sizeof(uint64_t))
         {
             return error_corruption("corrupt archive '{}': missing data block count", pack_file_path);
@@ -983,7 +1227,6 @@ namespace ctar
         }
         data_block_metas_.clear();
         data_block_metas_.resize(static_cast<size_t>(data_block_count));
-        const uint64_t block_region_size = file_size - meta_region_size_;
         for (size_t i = 0; i < data_block_metas_.size(); ++i)
         {
             s = data_block_metas_[i].Deserialize(meta_ptr, meta_end);
@@ -992,8 +1235,8 @@ namespace ctar
                 return s;
             }
             const auto& block_meta = data_block_metas_[i];
-            if (block_meta.block_size > block_region_size ||
-                block_meta.block_file_offset > block_region_size - block_meta.block_size)
+            if (block_meta.block_size > block_region_size_ ||
+                block_meta.block_file_offset > block_region_size_ - block_meta.block_size)
             {
                 return error_corruption("corrupt archive '{}': data block {} lies outside the block region",
                                         pack_file_path, block_meta.block_id);
@@ -1005,6 +1248,20 @@ namespace ctar
             else
             {
                 return error_io("fail to find the dir name of {}", block_meta.dir_id);
+            }
+        }
+        if (!legacy_layout_)
+        {
+            const auto stats = pack_file_handle_.GetFileStats();
+            if (stats.file_count != pack_file_header_.file_count ||
+                stats.file_data_original_size != pack_file_header_.file_data_original_size ||
+                stats.file_data_compressed_size != pack_file_header_.file_data_compressed_size ||
+                stats.block_padding_size != 0 ||
+                data_block_metas_.size() != pack_file_header_.block_count ||
+                pack_file_handle_.GetDirectoryCount() != pack_file_header_.directory_count)
+            {
+                return error_corruption("corrupt archive '{}': header summary does not match the metadata",
+                                        pack_file_path);
             }
         }
         return {};
@@ -1057,9 +1314,8 @@ namespace ctar
         return status;
     }
 
-    uint64_t BlockStore::GetMetaSize() const
+    uint64_t BlockStore::GetRawMetaSize() const
     {
-        size_t header_size = pack_file_header_.SerializedSize();
         size_t pack_file_meta_size = pack_file_handle_.PackFileMetaSerializedSize();
         size_t data_block_meta_size = 0;
         for (const auto& data_block_meta : data_block_metas_)
@@ -1068,6 +1324,6 @@ namespace ctar
         }
         // use an uint64_t to store the count of blocks
         data_block_meta_size += sizeof(uint64_t);
-        return header_size + pack_file_meta_size + data_block_meta_size;
+        return pack_file_meta_size + data_block_meta_size;
     }
 }; // namespace ctar

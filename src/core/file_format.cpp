@@ -96,15 +96,32 @@ namespace
 
     void PackFileHeader::Serialize(std::string* dst) const
     {
-        assert(file_meta_size >= 4 * unit::KiB - sizeof(PackFileHeader));
+        dst->clear();
         PutFixed32(dst, magic_number);
         PutFixed32(dst, file_format_version.Encode());
-        PutFixed64(dst, file_meta_size);
+        PutFixed32(dst, ctar_version);
+        PutFixed32(dst, compressed_param);
+        PutFixed64(dst, pack_begin_time);
+        PutFixed64(dst, pack_end_time);
+        PutFixed64(dst, pack_file_size);
+        PutFixed64(dst, file_count);
+        PutFixed64(dst, directory_count);
+        PutFixed64(dst, block_count);
+        PutFixed64(dst, file_data_offset);
+        PutFixed64(dst, file_data_original_size);
+        PutFixed64(dst, file_data_compressed_size);
+        PutFixed64(dst, file_data_compressed_type);
+        PutFixed64(dst, metadata_offset);
+        PutFixed64(dst, metadata_original_size);
+        PutFixed64(dst, metadata_compressed_size);
+        PutFixed64(dst, metadata_compressed_type);
+        PutFixed64(dst, metadata_checksum);
+        dst->resize(kSerializedSize, '\0');
     }
 
-    Status PackFileHeader::Deserialize(const char*& ptr, const char* end)
+    Status PackFileHeader::Deserialize(const char* ptr, const char* end)
     {
-        if (!HasBytes(ptr, end, SerializedSize()))
+        if (!HasBytes(ptr, end, kUsedSize))
         {
             return TruncatedMetadata();
         }
@@ -114,28 +131,54 @@ namespace
         {
             return error_corruption("Invalid magic number");
         }
-        const uint32_t version_number = DecodeFixed32(ptr);
+        file_format_version = Version::Decode(DecodeFixed32(ptr));
         ptr += sizeof(uint32_t);
-        file_format_version = Version::Decode(version_number);
-        // Refuse archives written by a newer format: reading their entries would be a
-        // guess, and old readers must not misinterpret new entry types.
-        if (file_format_version.major > kFileFormatVersion.major ||
-            (file_format_version.major == kFileFormatVersion.major &&
-             file_format_version.minor > kFileFormatVersion.minor))
+        ctar_version = DecodeFixed32(ptr);
+        ptr += sizeof(uint32_t);
+        compressed_param = DecodeFixed32(ptr);
+        ptr += sizeof(uint32_t);
+        auto read64 = [&ptr]() -> uint64_t
         {
-            return error_corruption("archive format {} is newer than the supported {}",
-                                    file_format_version.to_string(), kFileFormatVersion.to_string());
+            const uint64_t value = DecodeFixed64(ptr);
+            ptr += sizeof(uint64_t);
+            return value;
+        };
+        pack_begin_time = read64();
+        pack_end_time = read64();
+        pack_file_size = read64();
+        file_count = read64();
+        directory_count = read64();
+        block_count = read64();
+        file_data_offset = read64();
+        file_data_original_size = read64();
+        file_data_compressed_size = read64();
+        file_data_compressed_type = read64();
+        metadata_offset = read64();
+        metadata_original_size = read64();
+        metadata_compressed_size = read64();
+        metadata_compressed_type = read64();
+        metadata_checksum = read64();
+        return {};
+    }
+
+    Status LegacyPackFileHeader::Deserialize(const char*& ptr, const char* end)
+    {
+        if (!HasBytes(ptr, end, kSerializedSize))
+        {
+            return TruncatedMetadata();
         }
+        magic_number = DecodeFixed32(ptr);
+        ptr += sizeof(uint32_t);
+        if (magic_number != kMagicNumber)
+        {
+            return error_corruption("Invalid magic number");
+        }
+        file_format_version = Version::Decode(DecodeFixed32(ptr));
+        ptr += sizeof(uint32_t);
         file_meta_size = DecodeFixed64(ptr);
         ptr += sizeof(uint64_t);
         return {};
     }
-
-    size_t PackFileHeader::SerializedSize() const
-    {
-        return FixedFieldTotalSize(magic_number, file_format_version, file_meta_size);
-    }
-
 
     size_t DataBlockMeta::SerializedSize() const
     {
@@ -554,10 +597,10 @@ namespace
 
     void PackFileMeta::Serialize(std::string* dst) const
     {
-        PutFixed64(dst, total_file_count);
-        PutFixed64(dst, total_original_size);
-        PutFixed64(dst, total_compressed_size);
-        PutFixed64(dst, padding_size);
+        PutFixed64(dst, file_count);
+        PutFixed64(dst, file_data_original_size);
+        PutFixed64(dst, file_data_compressed_size);
+        PutFixed64(dst, block_padding_size);
 
         PutFixed64(dst, dir_name_data.size());
         dst->append(dir_name_data);
@@ -576,19 +619,19 @@ namespace
     {
         Clear();
 
-        if (auto s = ReadFixed64(ptr, end, total_file_count); !s)
+        if (auto s = ReadFixed64(ptr, end, file_count); !s)
         {
             return s;
         }
-        if (auto s = ReadFixed64(ptr, end, total_original_size); !s)
+        if (auto s = ReadFixed64(ptr, end, file_data_original_size); !s)
         {
             return s;
         }
-        if (auto s = ReadFixed64(ptr, end, total_compressed_size); !s)
+        if (auto s = ReadFixed64(ptr, end, file_data_compressed_size); !s)
         {
             return s;
         }
-        if (auto s = ReadFixed64(ptr, end, padding_size); !s)
+        if (auto s = ReadFixed64(ptr, end, block_padding_size); !s)
         {
             return s;
         }
@@ -667,7 +710,7 @@ namespace
     size_t PackFileMeta::SerializedSize() const
     {
         size_t total_size =
-            FixedFieldTotalSize(total_file_count, total_original_size, total_compressed_size, padding_size);
+            FixedFieldTotalSize(file_count, file_data_original_size, file_data_compressed_size, block_padding_size);
         total_size += ContainerSerializedTotalSize(dir_name_data, file_name_data);
         total_size += EntryRecordMapSerializedSize(dir_entry_records);
         total_size += EntryRecordMapSerializedSize(file_entry_records);
@@ -866,8 +909,8 @@ namespace
         {
             const uint64_t file_size = static_cast<uint64_t>(file_stat.st_size);
             file_meta.file_orig_size = file_size;
-            pack_file_meta_.total_original_size += file_size;
-            pack_file_meta_.total_file_count += 1;
+            pack_file_meta_.file_data_original_size += file_size;
+            pack_file_meta_.file_count += 1;
         }
 
 #if defined(__APPLE__)

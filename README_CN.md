@@ -118,7 +118,7 @@ input_dir/resource/bin/file6.bin
 ```shell
 > ctar pack input_dir pack_file.ctar
 file count: 10, original bytes: 630
-pack file bytes: 8386 (compressed payload bytes: 190)
+pack file bytes: 10201 (compressed payload bytes: 190)
 elapsed time: 10 ms, compression size percent: 30.16%, Throughput: 61.5K/s
 ```
 
@@ -134,17 +134,18 @@ elapsed time: 10 ms, compression size percent: 30.16%, Throughput: 61.5K/s
 归档大小可以这样核对：
 
 ```
-pack file bytes = 元数据区 + compressed payload bytes + padding bytes + 4
+pack file bytes = header + file data + metadata (compressed) + 4
 ```
 
-`padding bytes` 是块间 padding（新归档为 0）；`stat` 对旧归档仍会显示实际值。
+metadata 只有达到 1 MiB 才会压缩；低于阈值时 compressed 和 original 两个值相等。`stat` 对 1.0.0 旧归档
+会回退到旧布局。
 
 ### 解包
 
 ```shell
 > ctar unpack pack_file.ctar output_dir
 file count: 10, original bytes: 630
-pack file bytes: 8386 (compressed payload bytes: 190)
+pack file bytes: 10201 (compressed payload bytes: 190)
 elapsed time: 1 ms, compression size percent: 30.16%, Throughput: 615.2K/s
 ```
 
@@ -161,17 +162,19 @@ original bytes: 630
 compression size percent: 30.16%
 
 layout (bytes):
-  pack file bytes:            8386
-    header:                     16
-    metadata:                 8176
-    compressed data:           190
-    tail magic:                  4
+  pack file bytes:            10201
+    header:                    4096
+    file data:                  190
+    metadata (compressed):     5911
+    metadata (original):       5911
+    tail magic:                   4
 ```
 
 - `directories` 包含根目录
-- `metadata` 是 header 里存储的 `file_meta_size`：文件元数据、块元数据和 4K 对齐 padding
-- 旧归档如果存在块间 padding，会额外显示 `block padding`
-- `pack file bytes = header + metadata + compressed data + tail magic`（有 `block padding` 时再加上）
+- `file data` 是压缩后的文件 payload 总大小
+- `metadata (compressed)` 是存储的 metadata 大小；`metadata (original)` 是压缩前大小
+- metadata 只有达到 1 MiB 才压缩，所以小归档两个值相等
+- 1.0.0 旧归档会回退到旧布局（`header`、`metadata`、`compressed data`、`tail magic`）
 
 ### 查看目录树
 

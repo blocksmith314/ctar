@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include "gmock/gmock-matchers.h"
 #include "src/core/file_format.h"
+#include "src/utils/coding.h"
 #include "src/utils/serialize_helper.h"
 #include "src/utils/tools.h"
 #include "test/tools/fixture/blob_store_fixture.h"
@@ -16,25 +17,67 @@ namespace ctar
 
     TEST(PackFileHeader, SerializeDeserialize)
     {
-        uint64_t file_meta_size = 4096;
-        PackFileHeader file_header;
-        file_header.file_meta_size = file_meta_size;
-        ASSERT_EQ(file_header.magic_number, kMagicNumber);
-        ASSERT_EQ(file_header.file_format_version.Encode(), kFileFormatVersion.Encode());
-        ASSERT_EQ(file_header.file_meta_size, file_meta_size);
+        PackFileHeader src;
+        src.ctar_version = kToolVersion.Encode();
+        src.compressed_param = 4;
+        src.pack_begin_time = 1000;
+        src.pack_end_time = 2000;
+        src.pack_file_size = 4096 + 100 + 50 + 4;
+        src.file_count = 10;
+        src.directory_count = 3;
+        src.block_count = 2;
+        src.file_data_offset = PackFileHeader::kSerializedSize;
+        src.file_data_original_size = 100;
+        src.file_data_compressed_size = 90;
+        src.file_data_compressed_type = static_cast<uint64_t>(CompressionType::kLZ4);
+        src.metadata_offset = PackFileHeader::kSerializedSize + 90;
+        src.metadata_original_size = 40;
+        src.metadata_compressed_size = 50;
+        src.metadata_compressed_type = static_cast<uint64_t>(CompressionType::kLZ4);
+        src.metadata_checksum = 0xabcd;
+
         std::string buf;
-        file_header.Serialize(&buf);
+        src.Serialize(&buf);
+        ASSERT_EQ(buf.size(), PackFileHeader::kSerializedSize);
 
-        PackFileHeader deser_file_header{};
-        const char* p = buf.data();
-
-        Status s = deser_file_header.Deserialize(p, buf.data() + buf.size());
+        PackFileHeader dst;
+        Status s = dst.Deserialize(buf.data(), buf.data() + buf.size());
         ASSERT_TRUE(s);
-        ASSERT_EQ(deser_file_header.magic_number, kMagicNumber);
-        ASSERT_EQ(deser_file_header.file_format_version.Encode(), kFileFormatVersion.Encode());
-        ASSERT_EQ(deser_file_header.file_meta_size, file_meta_size);
+        EXPECT_EQ(dst.magic_number, kMagicNumber);
+        EXPECT_EQ(dst.file_format_version.Encode(), kFileFormatVersion.Encode());
+        EXPECT_EQ(dst.ctar_version, src.ctar_version);
+        EXPECT_EQ(dst.compressed_param, src.compressed_param);
+        EXPECT_EQ(dst.pack_begin_time, src.pack_begin_time);
+        EXPECT_EQ(dst.pack_end_time, src.pack_end_time);
+        EXPECT_EQ(dst.pack_file_size, src.pack_file_size);
+        EXPECT_EQ(dst.file_count, src.file_count);
+        EXPECT_EQ(dst.directory_count, src.directory_count);
+        EXPECT_EQ(dst.block_count, src.block_count);
+        EXPECT_EQ(dst.file_data_offset, src.file_data_offset);
+        EXPECT_EQ(dst.file_data_original_size, src.file_data_original_size);
+        EXPECT_EQ(dst.file_data_compressed_size, src.file_data_compressed_size);
+        EXPECT_EQ(dst.file_data_compressed_type, src.file_data_compressed_type);
+        EXPECT_EQ(dst.metadata_offset, src.metadata_offset);
+        EXPECT_EQ(dst.metadata_original_size, src.metadata_original_size);
+        EXPECT_EQ(dst.metadata_compressed_size, src.metadata_compressed_size);
+        EXPECT_EQ(dst.metadata_compressed_type, src.metadata_compressed_type);
+        EXPECT_EQ(dst.metadata_checksum, src.metadata_checksum);
     }
 
+    TEST(LegacyPackFileHeader, SerializeDeserialize)
+    {
+        std::string buf;
+        PutFixed32(&buf, kMagicNumber);
+        PutFixed32(&buf, Version(1, 0, 0).Encode());
+        PutFixed64(&buf, 4096);
+        const char* ptr = buf.data();
+        LegacyPackFileHeader header;
+        Status s = header.Deserialize(ptr, buf.data() + buf.size());
+        ASSERT_TRUE(s);
+        EXPECT_EQ(header.magic_number, kMagicNumber);
+        EXPECT_EQ(header.file_format_version.Encode(), Version(1, 0, 0).Encode());
+        EXPECT_EQ(header.file_meta_size, 4096);
+    }
 
     TEST(DataBlobMeta, SerializeDeserializeWithData)
     {

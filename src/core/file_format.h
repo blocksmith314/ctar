@@ -191,29 +191,64 @@ namespace ctar
 
     struct FileStats
     {
-        uint64_t total_file_count = 0;
-        uint64_t total_original_size = 0;
-        uint64_t total_compressed_size = 0;
-        uint64_t padding_size = 0;
+        uint64_t file_count = 0;
+        uint64_t file_data_original_size = 0;
+        uint64_t file_data_compressed_size = 0;
+        uint64_t block_padding_size = 0;
     };
 
+    /// 1.1.0 header: fixed 4096-byte region, explicit field order.
     struct PackFileHeader
     {
+        static constexpr size_t kSerializedSize = 4096;
+        static constexpr size_t kUsedSize = 136;
+
         uint32_t magic_number = kMagicNumber;
         Version file_format_version = kFileFormatVersion;
-        uint64_t file_meta_size = 0;
+        uint32_t ctar_version = kToolVersion.Encode();
+        uint32_t compressed_param = 0;
+        uint64_t pack_begin_time = 0;
+        uint64_t pack_end_time = 0;
+        uint64_t pack_file_size = 0;
+        uint64_t file_count = 0;
+        uint64_t directory_count = 0;
+        uint64_t block_count = 0;
+        uint64_t file_data_offset = 0;
+        uint64_t file_data_original_size = 0;
+        uint64_t file_data_compressed_size = 0;
+        uint64_t file_data_compressed_type = 0;
+        uint64_t metadata_offset = 0;
+        uint64_t metadata_original_size = 0;
+        uint64_t metadata_compressed_size = 0;
+        uint64_t metadata_compressed_type = 0;
+        uint64_t metadata_checksum = 0;
+
         PackFileHeader() = default;
         void Serialize(std::string* dst) const;
+        Status Deserialize(const char* ptr, const char* end);
+        [[nodiscard]] static constexpr size_t SerializedSize() noexcept { return kSerializedSize; }
+    };
+
+    /// 1.0.0 header: 16 bytes, metadata region follows immediately.
+    struct LegacyPackFileHeader
+    {
+        static constexpr size_t kSerializedSize = 16;
+
+        uint32_t magic_number = kMagicNumber;
+        Version file_format_version{1, 0, 0};
+        uint64_t file_meta_size = 0;
+
+        LegacyPackFileHeader() = default;
         Status Deserialize(const char*& ptr, const char* end);
-        [[nodiscard]] size_t SerializedSize() const;
+        [[nodiscard]] static constexpr size_t SerializedSize() noexcept { return kSerializedSize; }
     };
 
     struct PackFileMeta
     {
-        uint64_t total_file_count = 0;
-        uint64_t total_original_size = 0;
-        uint64_t total_compressed_size = 0;
-        uint64_t padding_size = 0;
+        uint64_t file_count = 0;
+        uint64_t file_data_original_size = 0;
+        uint64_t file_data_compressed_size = 0;
+        uint64_t block_padding_size = 0;
         std::string dir_name_data;
         std::string file_name_data;
         SortedMap<entry_id_t, EntryRecord> dir_entry_records;
@@ -277,9 +312,9 @@ namespace ctar
             {
                 real_sum += val.size();
             }
-            assert(real_sum == pack_file_meta_.total_file_count && "total_file_count cache dirty");
+            assert(real_sum == pack_file_meta_.file_count && "file_count cache dirty");
 #endif
-            return pack_file_meta_.total_file_count;
+            return pack_file_meta_.file_count;
         }
 
         /// @brief Get total payload file size sum of all files
@@ -295,21 +330,21 @@ namespace ctar
                     real_sum += file_byte;
                 }
             }
-            assert(real_sum == pack_file_meta_.total_original_size && "total_file_size_ cache dirty");
+            assert(real_sum == pack_file_meta_.file_data_original_size && "total_file_size_ cache dirty");
 #endif
-            return pack_file_meta_.total_original_size;
+            return pack_file_meta_.file_data_original_size;
         }
 
         /// @brief Get file stats of packed file
         /// @return File statistics summary
-        ///         - total_file_count: number of stored files
-        ///         - total_original_size: original uncompressed total size
-        ///         - total_compressed_size: compressed payload total size
-        ///         - padding_size: block-region padding bytes (0 for archives without per-block padding)
+        ///         - file_count: number of stored files
+        ///         - file_data_original_size: original uncompressed total size
+        ///         - file_data_compressed_size: compressed payload total size
+        ///         - block_padding_size: block-region padding bytes (0 for archives without per-block padding)
         [[nodiscard]] FileStats GetFileStats() const
         {
-            return {pack_file_meta_.total_file_count, pack_file_meta_.total_original_size,
-                    pack_file_meta_.total_compressed_size, pack_file_meta_.padding_size};
+            return {pack_file_meta_.file_count, pack_file_meta_.file_data_original_size,
+                    pack_file_meta_.file_data_compressed_size, pack_file_meta_.block_padding_size};
         }
 
         /// @brief Number of directory entries, including the root directory.
@@ -404,8 +439,8 @@ namespace ctar
         /// @param block_region_size Total size of block region (payload + padding)
         void SetCompressedAndPaddingBytes(const uint64_t compressed_bytes, const uint64_t block_region_size)
         {
-            pack_file_meta_.total_compressed_size = compressed_bytes;
-            pack_file_meta_.padding_size = block_region_size - compressed_bytes;
+            pack_file_meta_.file_data_compressed_size = compressed_bytes;
+            pack_file_meta_.block_padding_size = block_region_size - compressed_bytes;
         }
 
         /// @brief Process filesystem directory entry, extract metadata from OS

@@ -405,10 +405,18 @@ namespace ctar
         const std::string good = fixture.Bytes();
         ASSERT_GT(good.size(), 32U);
 
-        // header: magic(4) version(4) file_meta_size(8); the metadata starts at 16.
+        // header: magic(4) version(4); 1.1.0 metadata lives at the end.
         constexpr size_t kVersionOffset = 4;
-        constexpr size_t kMetaSizeOffset = 8;
-        const size_t dir_name_size_offset = sizeof(PackFileHeader) + 4 * sizeof(uint64_t);
+        constexpr size_t kMetadataOffsetOffset = 96;
+        constexpr size_t kMetadataOriginalSizeOffset = 104;
+        constexpr size_t kMetadataCompressedSizeOffset = 112;
+        constexpr size_t kFileDataOffsetOffset = 64;
+        const size_t metadata_offset = ReadU64At(good, kMetadataOffsetOffset);
+        const size_t metadata_size = ReadU64At(good, kMetadataCompressedSizeOffset);
+        const size_t file_data_offset = ReadU64At(good, kFileDataOffsetOffset);
+        ASSERT_EQ(file_data_offset, PackFileHeader::kSerializedSize);
+        ASSERT_EQ(metadata_offset + metadata_size + sizeof(kMagicNumber), good.size());
+        const size_t dir_name_size_offset = metadata_offset + 4 * sizeof(uint64_t);
         const uint64_t dir_name_size = ReadU64At(good, dir_name_size_offset);
         const size_t file_name_size_offset = dir_name_size_offset + sizeof(uint64_t) + dir_name_size;
         const uint64_t file_name_size = ReadU64At(good, file_name_size_offset);
@@ -427,12 +435,13 @@ namespace ctar
 
         {
             std::string bytes = good;
-            WriteU64At(bytes, kMetaSizeOffset, 0x7FFFFFFFFFFFFFFFULL);
+            WriteU64At(bytes, kMetadataCompressedSizeOffset, 0x7FFFFFFFFFFFFFFFULL);
             expect_rejected(bytes, "huge metadata size");
         }
         {
             std::string bytes = good;
-            WriteU64At(bytes, kMetaSizeOffset, 0);
+            WriteU64At(bytes, kMetadataOriginalSizeOffset, 0);
+            WriteU64At(bytes, kMetadataCompressedSizeOffset, 0);
             expect_rejected(bytes, "empty metadata size");
         }
         {
@@ -456,8 +465,9 @@ namespace ctar
         MalformedArchiveFixture fixture;
         fixture.Create();
         const std::string good = fixture.Bytes();
-        const uint64_t meta_size = ReadU64At(good, 8);
-        const size_t meta_end = static_cast<size_t>(sizeof(PackFileHeader) + meta_size);
+        const size_t metadata_offset = ReadU64At(good, 96);
+        const size_t metadata_size = ReadU64At(good, 112);
+        const size_t meta_end = metadata_offset + metadata_size;
         ASSERT_LT(meta_end, good.size());
 
         std::mt19937 rng(20261108);
@@ -564,8 +574,7 @@ namespace ctar
 
         // Corrupt the first payload byte so the per-file hash check fails.
         std::string bytes = ReadWholeFile(fixture.archive.string());
-        const uint64_t meta_size = ReadU64At(bytes, 8);
-        const size_t payload_offset = sizeof(PackFileHeader) + static_cast<size_t>(meta_size);
+        const size_t payload_offset = ReadU64At(bytes, 64);
         ASSERT_LT(payload_offset, bytes.size());
         bytes[payload_offset] = static_cast<char>(bytes[payload_offset] ^ 0xFF);
         WriteWholeFile(fixture.archive.string(), bytes);
@@ -640,6 +649,40 @@ namespace ctar
         // 200 blocks with a 1-byte payload. Padding every block to 4 KiB would add
         // ~800 KiB; the metadata itself is only ~124 KiB.
         EXPECT_LT(fs::file_size(archive), 200 * 1024);
+        fs::remove_all(root);
+    }
+
+    TEST(PackLayout, CompressesMetadataAboveThreshold)
+    {
+        const fs::path root("metadata_compression_test");
+        const fs::path tree = root / "tree";
+        fs::remove_all(root);
+        fs::create_directories(tree);
+        for (int i = 0; i < 5000; ++i)
+        {
+            std::ofstream(tree / ("file_" + std::to_string(i) + ".txt")) << "x";
+        }
+        const fs::path archive = root / "tree.ctar";
+        {
+            BlockStore store;
+            ASSERT_TRUE(store.Scan(tree.string()));
+            ASSERT_TRUE(store.PackPipeline(archive.string()));
+        }
+        {
+            BlockStore reader;
+            ASSERT_TRUE(reader.ReadPackHeaderOnly(archive.string()));
+            const auto& header = reader.GetPackHeader();
+            EXPECT_GT(header.metadata_original_size, kMetadataCompressionThreshold);
+            EXPECT_EQ(header.metadata_compressed_type, static_cast<uint64_t>(CompressionType::kLZ4));
+            EXPECT_LT(header.metadata_compressed_size, header.metadata_original_size);
+        }
+        const fs::path out = root / "out";
+        {
+            BlockStore reader;
+            ASSERT_TRUE(reader.UnPackPipeline(archive.string(), out.string()));
+        }
+        EXPECT_TRUE(fs::exists(out / tree / "file_0.txt"));
+        EXPECT_TRUE(fs::exists(out / tree / "file_4999.txt"));
         fs::remove_all(root);
     }
 
