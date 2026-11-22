@@ -18,13 +18,16 @@ not part of the repository.
 | measured | release / ref | commit | pack time | pack peak RSS | unpack time | unpack peak RSS |
 |---|---|---|---|---|---|---|
 | 2026-11-22 | v1.1.1 | `603993d` | 3.557 s | 851.6 MiB | 4.442 s | 768.8 MiB |
-| 2026-11-22 | main | `0bdcdc5` | 3.537 s | 926.6 MiB | 4.343 s | 781.0 MiB |
+| 2026-11-22 | main (pre-#93) | `0bdcdc5` | 3.537 s | 926.6 MiB | 4.343 s | 781.0 MiB |
+| 2026-11-22 | main (post-#93) | `afdeb6b` | 3.61-3.74 s | 852-878 MiB | - | - |
 
-A second, pack-only run on the same machine measured main at 3.632 s / 890.4 MiB
-(v1.1.1: 3.559 s / 857.8 MiB). Pack peak RSS is therefore roughly 4-9% above
-v1.1.1 across runs while wall time stays flat. This drift is tracked in #93 and
-is likely related to the metadata compression buffers added after v1.1.1; treat
-the v1.1.1 -> main memory row as a known open item, not a finished comparison.
+A second pack-only run measured the pre-#93 main at 3.632 s / 890.4 MiB
+(v1.1.1: 3.559 s / 857.8 MiB). #93 traced the ~4-9% pack-RSS drift to redundant
+metadata copies during packing and fixed it in `afdeb6b`. After the fix, pack
+peak RSS measured 852-878 MiB across three 10-run comparisons (v1.1.1 baseline:
+838-854 MiB). The allocation reduction is visible in the code, but this
+machine's run-to-run RSS noise is around +/-20 MiB; replace the post-#93 row
+with the next release measurement.
 
 ## Updating
 
