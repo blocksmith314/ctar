@@ -176,6 +176,8 @@ namespace ctar
         bool track_created_dirs_ = false;
         CompressionConfig compression_config_;
         unsigned thread_cnt_ = 1;
+        // Per-file decompression budget for unpack; 0 means unlimited.
+        uint64_t max_decompressed_file_size_ = kDefaultMaxDecompressedFileSize;
 
         [[nodiscard]] uint64_t GetRawMetaSize() const;
 
@@ -227,8 +229,10 @@ namespace ctar
         /// Restore block structures by reading from an existing pack file.
         /// Reconstructs block metadata from packed archive.
         /// @param pack_file_path file path of pack file
+        /// @param max_decompressed_file_size per-file decompression budget; 0 means unlimited
         /// @return Status OK when build success
-        Status RestoreBlocksFromPack(const std::string& pack_file_path);
+        Status RestoreBlocksFromPack(const std::string& pack_file_path,
+                                     uint64_t max_decompressed_file_size = kDefaultMaxDecompressedFileSize);
 
 
         /// Submit pack or unpack tasks to the thread pool.
@@ -250,6 +254,9 @@ namespace ctar
         /// @param output_dir Directory to restore extracted files.
         /// @param force Allow a non-empty output directory and replace its files.
         Status UnPackPipeline(const std::string& input_file, const std::string& output_dir, bool force = false);
+
+        /// @brief Set the per-file decompression budget used by unpack (0 = unlimited).
+        void SetMaxDecompressedFileSize(const uint64_t bytes) { max_decompressed_file_size_ = bytes; }
 
         [[nodiscard]] Status CreateUnpackDir();
 

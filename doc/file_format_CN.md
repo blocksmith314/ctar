@@ -153,6 +153,17 @@ data_block_meta[data_block_count]
 3. 文件数据位于 `payload_start + entry_meta.offset`，长度为 `file_compressed_size` 字节。
 4. 按 `file_compressed_types` 解压，并用 `file_hashes` 校验。
 
+### 读取端校验约束
+
+以下跨字段不变量不是独立的序列化字段，但 reader 会拒绝违反它们的归档，writer 必须满足：
+
+- 块内 `file_ids` 严格递增，同一块不能引用同一个文件两次。
+- 文件区间（`file_offsets` + `file_compressed_sizes`）有序、互不重叠，且都位于 `payload_size` 内。
+- 对 `kLZ4`/`kLZ4HC`，`file_orig_sizes` 和 `file_compressed_sizes` 必须落在 LZ4 的 `int` API 范围内，`file_orig_sizes <= 255 * file_compressed_sizes`，且原始大小为 0 时存储大小也必须为 0。
+- 每个 `file_ids[i]` 都必须存在于 `file_entry_records`，其 `block_id`、`file_orig_size`、`file_compressed_size` 和绝对 `offset` 与块元数据一致；所有索引文件都必须被且仅被引用一次。
+- 目录路径唯一，同一目录内文件名唯一，保证每个解压文件有唯一的输出路径。
+- `unpack` 对每个文件施加解压大小预算（`--max-decompressed-size`，默认 1 GiB，`0` 表示不限制）。更大的文件需要调大预算，或等待分块支持（#38）。
+
 ### 版本编码与兼容性
 
 `file_format_version` 是 `u32`：`major` 位于第 0..7 位，`minor` 位于 8..15 位，`patch` 位于 16..23 位，

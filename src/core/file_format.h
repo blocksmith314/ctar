@@ -422,6 +422,13 @@ namespace ctar
             return pack_file_meta_.dir_entry_records;
         }
 
+        /// @brief Get read‑only view of all file entry records
+        /// @return const reference to file entry records map
+        [[nodiscard]] const SortedMap<entry_id_t, EntryRecord>& GetFileEntryRecords() const
+        {
+            return pack_file_meta_.file_entry_records;
+        }
+
 
         /// @brief Get child file sizes under specified parent directory
         /// @param parent_dir_id parent directory entry id
@@ -534,7 +541,9 @@ namespace ctar
     /// @param block_meta block to validate
     /// @param path_of optional resolver used only to name the failing entry in error
     ///                messages; valid blocks never call it
+    /// @param max_original_size per-file decompression budget; 0 means unlimited
     /// @return Ok on success, kCorruption otherwise
-    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of = {});
+    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of = {},
+                                 uint64_t max_original_size = kDefaultMaxDecompressedFileSize);
 }; // namespace ctar
 #endif // CTAR_FORMAT_H

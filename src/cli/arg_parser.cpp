@@ -1,6 +1,8 @@
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <xxhash.h>
 
 #include "api/ctar.h"
@@ -78,6 +80,10 @@ COMMAND OPTIONS
         -f, --force
             Allow a non-empty output directory; existing files are replaced.
 
+        --max-decompressed-size SIZE
+            Per-file decompressed-size limit (default 1G, 0 = unlimited).
+            Files above it are rejected during unpack.
+
     ls:
         -h
             Print sizes in human-readable form (1024-based: K, M, G).
@@ -125,6 +131,86 @@ Run 'ctar <command> --help' for the full option list of a command.
 namespace ctar::cli
 {
     void PrintHelp() { std::cout << kUsageText; }
+
+    namespace
+    {
+        // Parse a byte size with the same 1024-based suffixes as HumanReadableBytes:
+        // 123, 123B, 123K, 123KB, 123KiB, ... 0 means "no limit" to callers.
+        bool ParseSize(std::string_view text, uint64_t& out)
+        {
+            if (text.empty())
+            {
+                return false;
+            }
+            size_t pos = 0;
+            uint64_t value = 0;
+            bool has_digits = false;
+            while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos])) != 0)
+            {
+                has_digits = true;
+                const uint64_t digit = static_cast<uint64_t>(text[pos] - '0');
+                if (value > (std::numeric_limits<uint64_t>::max() - digit) / 10)
+                {
+                    return false;
+                }
+                value = value * 10 + digit;
+                ++pos;
+            }
+            if (!has_digits)
+            {
+                return false;
+            }
+            uint64_t multiplier = 1;
+            if (pos < text.size())
+            {
+                const char suffix = static_cast<char>(std::tolower(static_cast<unsigned char>(text[pos])));
+                ++pos;
+                switch (suffix)
+                {
+                case 'b':
+                    multiplier = 1;
+                    break;
+                case 'k':
+                    multiplier = unit::KiB;
+                    break;
+                case 'm':
+                    multiplier = unit::MiB;
+                    break;
+                case 'g':
+                    multiplier = unit::GiB;
+                    break;
+                case 't':
+                    multiplier = unit::TiB;
+                    break;
+                default:
+                    return false;
+                }
+                // Optional "B" or "iB" after K/M/G/T (1KB, 1KiB).
+                if (suffix != 'b' && pos < text.size())
+                {
+                    if ((text[pos] == 'b' || text[pos] == 'B') && pos + 1 == text.size())
+                    {
+                        ++pos;
+                    }
+                    else if (pos + 2 == text.size() && (text[pos] == 'i' || text[pos] == 'I') &&
+                             (text[pos + 1] == 'b' || text[pos + 1] == 'B'))
+                    {
+                        pos += 2;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+            }
+            if (pos != text.size() || value > std::numeric_limits<uint64_t>::max() / multiplier)
+            {
+                return false;
+            }
+            out = value * multiplier;
+            return true;
+        }
+    } // namespace
 
     std::string TrimTrailingSlash(std::string_view path)
     {
@@ -215,6 +301,21 @@ namespace ctar::cli
                     return error_invalid_arg("invalid compression param '{}', must be integer", argv[pos]);
                 }
                 opt.comp_config.compression_param = static_cast<int>(val);
+                ++pos;
+            }
+            else if (op == "--max-decompressed-size" && subcommand_name == "unpack")
+            {
+                ++pos;
+                if (pos >= argc)
+                {
+                    return error_invalid_arg("missing size after {}", op);
+                }
+                uint64_t size = 0;
+                if (!ParseSize(argv[pos], size))
+                {
+                    return error_invalid_arg("invalid size '{}' for {}; use e.g. 512M or 1G", argv[pos], op);
+                }
+                opt.max_decompressed_file_size = size;
                 ++pos;
             }
             else
@@ -572,7 +673,7 @@ namespace ctar::cli
 
                 if (store.IsLegacyLayout())
                 {
-                    status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                    status = store.RestoreBlocksFromPack(opt.pack_file_path, 0); // metadata-only: no decompression buffer
                     if (!status)
                     {
                         return error_run_time("failed to restore meta from '{}': {}", opt.pack_file_path,
@@ -653,6 +754,7 @@ namespace ctar::cli
             break;
         case CommandType::UNPACK:
             {
+                store.SetMaxDecompressedFileSize(opt.max_decompressed_file_size);
                 if (Status status = store.UnPackPipeline(opt.source_path, opt.output_path, opt.force); !status)
                 {
                     return error_run_time("failed to unpack archive '{}': {}", opt.source_path,
@@ -684,7 +786,7 @@ namespace ctar::cli
                 }
                 else
                 {
-                    status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                    status = store.RestoreBlocksFromPack(opt.pack_file_path, 0); // metadata-only: no decompression buffer
                     if (!status)
                     {
                         return error_run_time("failed to load archive '{}': {}", opt.pack_file_path,
@@ -701,7 +803,7 @@ namespace ctar::cli
             break;
         case CommandType::LS:
             {
-                Status status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                Status status = store.RestoreBlocksFromPack(opt.pack_file_path, 0); // metadata-only: no decompression buffer
                 if (!status)
                 {
                     return error_run_time("failed to load archive '{}': {}", opt.pack_file_path,
@@ -717,7 +819,7 @@ namespace ctar::cli
             break;
         case CommandType::DUMP:
             {
-                Status status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                Status status = store.RestoreBlocksFromPack(opt.pack_file_path, 0); // metadata-only: no decompression buffer
                 if (!status)
                 {
                     return error_run_time("failed to load archive '{}': {}", opt.pack_file_path,

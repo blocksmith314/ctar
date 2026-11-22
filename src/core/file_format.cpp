@@ -2,6 +2,7 @@
 #include <cerrno>
 #include <cstring>
 #include <grp.h>
+#include <limits>
 #include <pwd.h>
 #include <ranges>
 #include <sys/stat.h>
@@ -356,7 +357,8 @@ namespace
                            SerializedSize());
     }
 
-    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of)
+    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of,
+                                 const uint64_t max_original_size)
     {
         const size_t file_count = block_meta.file_ids.size();
         // Every per-file vector is indexed below, so guard the shape first: this
@@ -390,14 +392,43 @@ namespace
             return error_corruption("block {}: payload size {} exceeds block size {}", block_meta.block_id,
                                     block_meta.payload_size, block_meta.block_size);
         }
+        // LZ4's block format cannot expand a stream beyond roughly 255x: every
+        // match-length extension byte encodes at most 255 output bytes. Reject sizes
+        // that no valid stream could produce, and sizes the int-based LZ4 API cannot
+        // represent. This bounds the memory a hostile archive can make unpack allocate.
+        constexpr uint64_t kLz4MaxExpansion = 255;
+        const uint64_t int_max = static_cast<uint64_t>(std::numeric_limits<int>::max());
+        uint64_t previous_end = 0;
         for (size_t i = 0; i < file_count; ++i)
         {
+            // Pack writes the files of a block in scan order, so ids and ranges are both
+            // strictly ordered. Rejecting anything else also rules out duplicate ids,
+            // which would otherwise make two unpack tasks write the same path.
+            if (i > 0 && block_meta.file_ids[i] <= block_meta.file_ids[i - 1])
+            {
+                return error_corruption("{}: file ids are not strictly increasing ({} after {})", entry_label(i),
+                                        block_meta.file_ids[i], block_meta.file_ids[i - 1]);
+            }
             if (block_meta.file_offsets[i] > block_meta.payload_size ||
                 block_meta.file_compressed_sizes[i] > block_meta.payload_size - block_meta.file_offsets[i])
             {
                 return error_corruption("{}: offset {} + stored size {} exceeds payload size {}", entry_label(i),
                                         block_meta.file_offsets[i], block_meta.file_compressed_sizes[i],
                                         block_meta.payload_size);
+            }
+            if (i > 0 && block_meta.file_offsets[i] < previous_end)
+            {
+                return error_corruption("{}: offset {} overlaps the previous entry ending at {}", entry_label(i),
+                                        block_meta.file_offsets[i], previous_end);
+            }
+            previous_end = block_meta.file_offsets[i] + block_meta.file_compressed_sizes[i];
+            // A per-file budget bounds the buffer unpack allocates. The 255x check
+            // above only limits amplification; it still allows a multi-GiB expansion
+            // from a small archive.
+            if (max_original_size > 0 && block_meta.file_orig_sizes[i] > max_original_size)
+            {
+                return error_corruption("{}: original size {} exceeds the decompression budget {}", entry_label(i),
+                                        block_meta.file_orig_sizes[i], max_original_size);
             }
             switch (block_meta.file_compressed_types[i])
             {
@@ -411,6 +442,31 @@ namespace
                 break;
             case CompressionType::kLZ4:
             case CompressionType::kLZ4HC:
+                {
+                    const uint64_t original = block_meta.file_orig_sizes[i];
+                    const uint64_t compressed = block_meta.file_compressed_sizes[i];
+                    if (original > 0 && compressed == 0)
+                    {
+                        return error_corruption("{}: compressed entry stores 0 bytes for original size {}",
+                                                entry_label(i), original);
+                    }
+                    if (original == 0 && compressed > 0)
+                    {
+                        return error_corruption("{}: compressed entry has 0 original size but stores {} bytes",
+                                                entry_label(i), compressed);
+                    }
+                    if (original > int_max || compressed > int_max)
+                    {
+                        return error_corruption("{}: LZ4 entry original size {} or stored size {} exceeds {}",
+                                                entry_label(i), original, compressed, int_max);
+                    }
+                    if (original > compressed * kLz4MaxExpansion)
+                    {
+                        return error_corruption(
+                            "{}: original size {} exceeds the LZ4 expansion bound of {} x stored size {}",
+                            entry_label(i), original, kLz4MaxExpansion, compressed);
+                    }
+                }
                 break;
             default:
                 return error_corruption("{}: unknown compression type {}", entry_label(i),

@@ -155,6 +155,17 @@ The 4-byte `magic_number` (`CTAR`) follows the metadata at `metadata_offset + me
 3. The file bytes are at `payload_start + entry_meta.offset`, `file_compressed_size` bytes long.
 4. Decompress according to `file_compressed_types`; verify `file_hashes`.
 
+### reader validation contracts
+
+The reader rejects archives that violate these cross-field invariants; a writer must satisfy them even though they are not separate fields:
+
+- `file_ids` are strictly increasing within a block, so a block cannot reference the same file twice.
+- File ranges (`file_offsets` + `file_compressed_sizes`) are ordered, non-overlapping, and fit inside `payload_size`.
+- For `kLZ4`/`kLZ4HC`, `file_orig_sizes` and `file_compressed_sizes` fit the LZ4 `int` API, `file_orig_sizes <= 255 * file_compressed_sizes`, and a zero original size requires a zero stored size.
+- Every `file_ids[i]` exists in `file_entry_records`; the entry's `block_id`, `file_orig_size`, `file_compressed_size` and absolute `offset` agree with the block, and every indexed file is referenced exactly once.
+- Directory paths are unique, and a directory contains no duplicate file names, so every extracted file has a distinct output path.
+- `unpack` enforces a per-file decompressed-size budget (`--max-decompressed-size`, default 1 GiB, `0` disables it). Archives with larger files need a larger budget or chunked files (#38).
+
 ### version encoding and compatibility
 
 `file_format_version` is a `u32`: `major` in bits 0..7, `minor` in 8..15, `patch` in 16..23, `reserved` in

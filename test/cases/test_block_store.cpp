@@ -605,6 +605,234 @@ namespace ctar
         fixture.Cleanup();
     }
 
+    TEST(MalformedArchive, RejectsBlockMetaThatDisagreesWithEntryIndex)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        std::string bytes = fixture.Bytes();
+
+        constexpr size_t kMetadataOffsetField = 96;
+        constexpr size_t kMetadataSizeField = 112;
+        constexpr size_t kMetadataTypeField = 120;
+        constexpr size_t kMetadataChecksumField = 128;
+
+        const size_t metadata_offset = ReadU64At(bytes, kMetadataOffsetField);
+        const size_t metadata_size = ReadU64At(bytes, kMetadataSizeField);
+        ASSERT_GT(metadata_size, 0U);
+        ASSERT_EQ(ReadU64At(bytes, kMetadataTypeField), static_cast<uint64_t>(CompressionType::kNone));
+
+        size_t pos = metadata_offset;
+        const size_t metadata_end = metadata_offset + metadata_size;
+        const auto read_u64 = [&]()
+        {
+            EXPECT_LE(pos + sizeof(uint64_t), metadata_end);
+            const uint64_t value = ReadU64At(bytes, pos);
+            pos += sizeof(uint64_t);
+            return value;
+        };
+
+        // PackFileMeta: four scalar fields, then the two name buffers.
+        for (int i = 0; i < 4; ++i)
+        {
+            (void)read_u64();
+        }
+        pos += static_cast<size_t>(read_u64()); // dir_name_data
+        pos += static_cast<size_t>(read_u64()); // file_name_data
+
+        constexpr size_t kEntryRecordSize = 2 * sizeof(uint64_t) + 176;
+        constexpr size_t kFileOrigSizeInRecord = 176;
+        const uint64_t dir_count = read_u64();
+        pos += static_cast<size_t>(dir_count) * (sizeof(uint64_t) + kEntryRecordSize);
+        const uint64_t file_count = read_u64();
+        ASSERT_GE(file_count, 1U);
+        const size_t first_record_offset = pos + sizeof(uint64_t); // skip the map key
+        ASSERT_LT(first_record_offset + kEntryRecordSize, metadata_end);
+
+        // Make the entry index claim a different original size than the block metadata.
+        WriteU64At(bytes, first_record_offset + kFileOrigSizeInRecord, 0xDEADBEEFULL);
+
+        const std::string metadata = bytes.substr(metadata_offset, metadata_size);
+        WriteU64At(bytes, kMetadataChecksumField, XXH64(metadata.data(), metadata.size(), kHashSeed));
+
+        const Status status = fixture.Unpack(bytes);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("disagrees with the entry index"), std::string::npos)
+            << status.error().message();
+
+        fixture.Cleanup();
+    }
+
+    TEST(MalformedArchive, RejectsOverlappingAndDuplicateBlocks)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        const std::string good = fixture.Bytes();
+
+        constexpr size_t kMetadataOffsetField = 96;
+        constexpr size_t kMetadataSizeField = 112;
+        constexpr size_t kMetadataTypeField = 120;
+        constexpr size_t kMetadataChecksumField = 128;
+
+        const size_t metadata_offset = ReadU64At(good, kMetadataOffsetField);
+        const size_t metadata_size = ReadU64At(good, kMetadataSizeField);
+        ASSERT_EQ(ReadU64At(good, kMetadataTypeField), static_cast<uint64_t>(CompressionType::kNone));
+
+        size_t pos = metadata_offset;
+        const size_t metadata_end = metadata_offset + metadata_size;
+        const auto read_u64 = [&]()
+        {
+            EXPECT_LE(pos + sizeof(uint64_t), metadata_end);
+            const uint64_t value = ReadU64At(good, pos);
+            pos += sizeof(uint64_t);
+            return value;
+        };
+
+        // PackFileMeta: four scalar fields, two name buffers, two entry maps, three
+        // id -> vector maps.
+        for (int i = 0; i < 4; ++i)
+        {
+            (void)read_u64();
+        }
+        pos += static_cast<size_t>(read_u64());
+        pos += static_cast<size_t>(read_u64());
+
+        constexpr size_t kEntryRecordSize = 2 * sizeof(uint64_t) + 176;
+        size_t file_records_start = 0;
+        uint64_t file_record_count = 0;
+        for (int map = 0; map < 2; ++map)
+        {
+            if (map == 1)
+            {
+                file_records_start = pos;
+            }
+            const uint64_t count = read_u64();
+            if (map == 1)
+            {
+                file_record_count = count;
+            }
+            pos += static_cast<size_t>(count) * (sizeof(uint64_t) + kEntryRecordSize);
+        }
+        for (int map = 0; map < 3; ++map)
+        {
+            const uint64_t count = read_u64();
+            for (uint64_t entry = 0; entry < count; ++entry)
+            {
+                (void)read_u64(); // key
+                const uint64_t value_count = read_u64();
+                pos += static_cast<size_t>(value_count) * sizeof(uint64_t);
+            }
+        }
+
+        const uint64_t block_count = read_u64();
+        ASSERT_GE(block_count, 2U);
+
+        const auto skip_block_meta = [&]()
+        {
+            for (int field = 0; field < 6; ++field)
+            {
+                (void)read_u64();
+            }
+            const uint64_t file_count = read_u64();
+            pos += static_cast<size_t>(file_count) * sizeof(uint64_t);
+            for (int vec = 0; vec < 2; ++vec) // orig sizes, compressed sizes
+            {
+                const uint64_t count = read_u64();
+                pos += static_cast<size_t>(count) * sizeof(uint64_t);
+            }
+            const uint64_t type_count = read_u64();
+            pos += static_cast<size_t>(type_count);
+            for (int vec = 0; vec < 2; ++vec) // offsets, hashes
+            {
+                const uint64_t count = read_u64();
+                pos += static_cast<size_t>(count) * sizeof(uint64_t);
+            }
+        };
+
+        const size_t first_block_start = pos;
+        const uint64_t first_block_id = ReadU64At(good, first_block_start);
+        const uint64_t first_block_offset = ReadU64At(good, first_block_start + 16);
+        const uint64_t first_block_size = ReadU64At(good, first_block_start + 32);
+        ASSERT_GT(first_block_size, 0U);
+        skip_block_meta();
+        const size_t second_block_start = pos;
+        ASSERT_LT(second_block_start, metadata_end);
+
+        const auto with_metadata_checksum = [&](std::string& patched)
+        {
+            const std::string metadata = patched.substr(metadata_offset, metadata_size);
+            WriteU64At(patched, kMetadataChecksumField, XXH64(metadata.data(), metadata.size(), kHashSeed));
+        };
+
+        {
+            std::string patched = good;
+            // Point the second block at the first block's start so their ranges overlap.
+            WriteU64At(patched, second_block_start + 16, first_block_offset);
+            with_metadata_checksum(patched);
+            const Status status = fixture.Unpack(patched);
+            ASSERT_FALSE(status);
+            EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+            EXPECT_NE(status.error().err_message.find("data blocks overlap"), std::string::npos)
+                << status.error().message();
+        }
+        {
+            std::string patched = good;
+            WriteU64At(patched, second_block_start, first_block_id);
+            with_metadata_checksum(patched);
+            const Status status = fixture.Unpack(patched);
+            ASSERT_FALSE(status);
+            EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+            EXPECT_NE(status.error().err_message.find("duplicate data block id"), std::string::npos)
+                << status.error().message();
+        }
+        {
+            std::string patched = good;
+            // Make the second block reference the first block's file id.
+            const uint64_t first_file_id = ReadU64At(good, first_block_start + sizeof(uint64_t) * 7);
+            WriteU64At(patched, second_block_start + sizeof(uint64_t) * 7, first_file_id);
+            with_metadata_checksum(patched);
+            const Status status = fixture.Unpack(patched);
+            ASSERT_FALSE(status);
+            EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+            EXPECT_NE(status.error().err_message.find("disagrees with the entry index"), std::string::npos)
+                << status.error().message();
+        }
+        {
+            std::string patched = good;
+            // Two distinct ids sharing one directory and one file name resolve to the
+            // same output path.
+            ASSERT_GE(file_record_count, 2U);
+            const size_t first_record = file_records_start + sizeof(uint64_t) * 2; // count + key
+            const size_t second_record = first_record + sizeof(uint64_t) + kEntryRecordSize;
+            const std::string first_name_handle = good.substr(first_record, sizeof(uint64_t) * 2);
+            patched.replace(second_record, sizeof(uint64_t) * 2, first_name_handle);
+            const uint64_t first_dir_id = ReadU64At(good, first_block_start + sizeof(uint64_t));
+            WriteU64At(patched, second_block_start + sizeof(uint64_t), first_dir_id);
+            with_metadata_checksum(patched);
+            const Status status = fixture.Unpack(patched);
+            ASSERT_FALSE(status);
+            EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+            EXPECT_NE(status.error().err_message.find("duplicate file name"), std::string::npos)
+                << status.error().message();
+        }
+
+        fixture.Cleanup();
+    }
+
+    TEST(UnpackBudget, RejectsFileAboveDecompressionBudget)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        BlockStore store;
+        store.SetMaxDecompressedFileSize(1);
+        const Status status = store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string(), true);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("decompression budget"), std::string::npos)
+            << status.error().message();
+        fixture.Cleanup();
+    }
+
 
     namespace
     {

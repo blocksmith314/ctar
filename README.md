@@ -102,6 +102,10 @@ ctar ls pack_file.ctar
 ctar dump pack_file.ctar
 ```
 
+`unpack` limits each file's decompressed size to 1 GiB by default; use
+`--max-decompressed-size SIZE` to change it (`0` disables the limit). Larger files
+are rejected until chunked unpacking (#38) lands.
+
 In most cases the `pack` and `unpack` commands are all you need, and the more files there are, the more noticeable
 the benefit. If you have other requirements — for example, storing the packed file in the cloud but wanting to
 retrieve only part of the data inside it — refer to the short tutorial below.
