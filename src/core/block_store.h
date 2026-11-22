@@ -231,7 +231,8 @@ namespace ctar
         /// @param pack_file_path file path of pack file
         /// @param max_decompressed_file_size per-file decompression budget; 0 means unlimited
         /// @return Status OK when build success
-        Status RestoreBlocksFromPack(const std::string& pack_file_path, uint64_t max_decompressed_file_size = 0);
+        Status RestoreBlocksFromPack(const std::string& pack_file_path,
+                                     uint64_t max_decompressed_file_size = kDefaultMaxDecompressedFileSize);
 
 
         /// Submit pack or unpack tasks to the thread pool.

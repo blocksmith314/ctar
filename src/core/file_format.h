@@ -544,6 +544,6 @@ namespace ctar
     /// @param max_original_size per-file decompression budget; 0 means unlimited
     /// @return Ok on success, kCorruption otherwise
     Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of = {},
-                                 uint64_t max_original_size = 0);
+                                 uint64_t max_original_size = kDefaultMaxDecompressedFileSize);
 }; // namespace ctar
 #endif // CTAR_FORMAT_H

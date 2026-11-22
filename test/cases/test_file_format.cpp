@@ -250,7 +250,8 @@ namespace ctar
         block.payload_size = kCompressed;
         block.block_size = kCompressed;
 
-        const Status status = ValidateDataBlockMeta(block);
+        // Budget disabled so the LZ4 API branch, not the budget, is exercised.
+        const Status status = ValidateDataBlockMeta(block, {}, 0);
         ASSERT_FALSE(status);
         EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
         EXPECT_NE(status.error().err_message.find("LZ4 entry original size"), std::string::npos)
@@ -319,12 +320,14 @@ namespace ctar
 
     TEST(DataBlobMeta, RejectsLz4StoredSizeBeyondApiLimit)
     {
+        // The original size is valid; only the stored size exceeds INT_MAX, so this
+        // isolates the compressed-size branch of the API-limit check.
         constexpr uint64_t kBeyondInt = 0x80000000ULL;
         DataBlockMeta block;
         block.file_ids = {1};
-        block.file_orig_sizes = {kBeyondInt};
+        block.file_orig_sizes = {1024};
         block.file_compressed_sizes = {kBeyondInt};
-        block.file_compressed_types = {CompressionType::kLZ4HC};
+        block.file_compressed_types = {CompressionType::kLZ4};
         block.file_offsets = {0};
         block.file_hashes = {0};
         block.payload_size = kBeyondInt;

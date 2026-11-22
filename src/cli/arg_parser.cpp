@@ -673,7 +673,7 @@ namespace ctar::cli
 
                 if (store.IsLegacyLayout())
                 {
-                    status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                    status = store.RestoreBlocksFromPack(opt.pack_file_path, 0); // metadata-only: no decompression buffer
                     if (!status)
                     {
                         return error_run_time("failed to restore meta from '{}': {}", opt.pack_file_path,
@@ -786,7 +786,7 @@ namespace ctar::cli
                 }
                 else
                 {
-                    status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                    status = store.RestoreBlocksFromPack(opt.pack_file_path, 0); // metadata-only: no decompression buffer
                     if (!status)
                     {
                         return error_run_time("failed to load archive '{}': {}", opt.pack_file_path,
@@ -803,7 +803,7 @@ namespace ctar::cli
             break;
         case CommandType::LS:
             {
-                Status status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                Status status = store.RestoreBlocksFromPack(opt.pack_file_path, 0); // metadata-only: no decompression buffer
                 if (!status)
                 {
                     return error_run_time("failed to load archive '{}': {}", opt.pack_file_path,
@@ -819,7 +819,7 @@ namespace ctar::cli
             break;
         case CommandType::DUMP:
             {
-                Status status = store.RestoreBlocksFromPack(opt.pack_file_path);
+                Status status = store.RestoreBlocksFromPack(opt.pack_file_path, 0); // metadata-only: no decompression buffer
                 if (!status)
                 {
                     return error_run_time("failed to load archive '{}': {}", opt.pack_file_path,
