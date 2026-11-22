@@ -541,7 +541,9 @@ namespace ctar
     /// @param block_meta block to validate
     /// @param path_of optional resolver used only to name the failing entry in error
     ///                messages; valid blocks never call it
+    /// @param max_original_size per-file decompression budget; 0 means unlimited
     /// @return Ok on success, kCorruption otherwise
-    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of = {});
+    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of = {},
+                                 uint64_t max_original_size = 0);
 }; // namespace ctar
 #endif // CTAR_FORMAT_H

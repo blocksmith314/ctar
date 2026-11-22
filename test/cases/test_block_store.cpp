@@ -698,9 +698,19 @@ namespace ctar
         pos += static_cast<size_t>(read_u64());
 
         constexpr size_t kEntryRecordSize = 2 * sizeof(uint64_t) + 176;
+        size_t file_records_start = 0;
+        uint64_t file_record_count = 0;
         for (int map = 0; map < 2; ++map)
         {
+            if (map == 1)
+            {
+                file_records_start = pos;
+            }
             const uint64_t count = read_u64();
+            if (map == 1)
+            {
+                file_record_count = count;
+            }
             pos += static_cast<size_t>(count) * (sizeof(uint64_t) + kEntryRecordSize);
         }
         for (int map = 0; map < 3; ++map)
@@ -775,7 +785,51 @@ namespace ctar
             EXPECT_NE(status.error().err_message.find("duplicate data block id"), std::string::npos)
                 << status.error().message();
         }
+        {
+            std::string patched = good;
+            // Make the second block reference the first block's file id.
+            const uint64_t first_file_id = ReadU64At(good, first_block_start + sizeof(uint64_t) * 7);
+            WriteU64At(patched, second_block_start + sizeof(uint64_t) * 7, first_file_id);
+            with_metadata_checksum(patched);
+            const Status status = fixture.Unpack(patched);
+            ASSERT_FALSE(status);
+            EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+            EXPECT_NE(status.error().err_message.find("disagrees with the entry index"), std::string::npos)
+                << status.error().message();
+        }
+        {
+            std::string patched = good;
+            // Two distinct ids sharing one directory and one file name resolve to the
+            // same output path.
+            ASSERT_GE(file_record_count, 2U);
+            const size_t first_record = file_records_start + sizeof(uint64_t) * 2; // count + key
+            const size_t second_record = first_record + sizeof(uint64_t) + kEntryRecordSize;
+            const std::string first_name_handle = good.substr(first_record, sizeof(uint64_t) * 2);
+            patched.replace(second_record, sizeof(uint64_t) * 2, first_name_handle);
+            const uint64_t first_dir_id = ReadU64At(good, first_block_start + sizeof(uint64_t));
+            WriteU64At(patched, second_block_start + sizeof(uint64_t), first_dir_id);
+            with_metadata_checksum(patched);
+            const Status status = fixture.Unpack(patched);
+            ASSERT_FALSE(status);
+            EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+            EXPECT_NE(status.error().err_message.find("duplicate file name"), std::string::npos)
+                << status.error().message();
+        }
 
+        fixture.Cleanup();
+    }
+
+    TEST(UnpackBudget, RejectsFileAboveDecompressionBudget)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        BlockStore store;
+        store.SetMaxDecompressedFileSize(1);
+        const Status status = store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string(), true);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("decompression budget"), std::string::npos)
+            << status.error().message();
         fixture.Cleanup();
     }
 

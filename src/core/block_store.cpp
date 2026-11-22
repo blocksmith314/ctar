@@ -495,6 +495,12 @@ namespace ctar
             const std::string output_file_name = output_path.value().string();
             if (block_meta.file_orig_sizes[i] > 0)
             {
+                if (max_decompressed_file_size_ > 0 &&
+                    block_meta.file_orig_sizes[i] > max_decompressed_file_size_)
+                {
+                    return error_corruption("file '{}' exceeds the decompression budget of {} bytes",
+                                            output_file_name, max_decompressed_file_size_);
+                }
                 decompress_buffer.EnsureCapacity(block_meta.file_orig_sizes[i]);
                 auto decompress_size = compress::Decompress(
                     block_meta.file_compressed_types[i], tls_block_buf.Data() + file_offset, decompress_buffer.Data(),
@@ -1147,7 +1153,8 @@ namespace ctar
         return {};
     }
 
-    Status BlockStore::RestoreBlocksFromPack(const std::string& pack_file_path)
+    Status BlockStore::RestoreBlocksFromPack(const std::string& pack_file_path,
+                                             const uint64_t max_decompressed_file_size)
     {
         Status s = ReadPackHeaderOnly(pack_file_path);
         if (!s)
@@ -1253,6 +1260,8 @@ namespace ctar
         block_ranges.reserve(data_block_metas_.size());
         std::unordered_set<uint64_t> block_ids;
         const auto& file_records = pack_file_handle_.GetFileEntryRecords();
+        std::vector<std::pair<entry_id_t, std::string_view>> file_names;
+        file_names.reserve(file_records.size());
         for (size_t i = 0; i < data_block_metas_.size(); ++i)
         {
             s = data_block_metas_[i].Deserialize(meta_ptr, meta_end);
@@ -1267,7 +1276,7 @@ namespace ctar
                 return error_corruption("corrupt archive '{}': data block {} lies outside the block region",
                                         pack_file_path, block_meta.block_id);
             }
-            if (auto valid = ValidateDataBlockMeta(block_meta, entry_path); !valid)
+            if (auto valid = ValidateDataBlockMeta(block_meta, entry_path, max_decompressed_file_size); !valid)
             {
                 return error_corruption("corrupt archive '{}': {}", pack_file_path, valid.error().message());
             }
@@ -1321,6 +1330,13 @@ namespace ctar
                         "corrupt archive '{}': file '{}' in data block {} disagrees with the entry index",
                         pack_file_path, entry_path(block_meta.dir_id, file_id), block_meta.block_id);
                 }
+                const auto file_name = pack_file_handle_.GetFileNameByFileId(file_id);
+                if (!file_name)
+                {
+                    return error_corruption("corrupt archive '{}': file id {} has no entry name", pack_file_path,
+                                            file_id);
+                }
+                file_names.emplace_back(block_meta.dir_id, file_name.value());
                 ++referenced_files;
             }
         }
@@ -1328,6 +1344,38 @@ namespace ctar
         {
             return error_corruption("corrupt archive '{}': entry index has {} files but blocks reference {}",
                                     pack_file_path, file_records.size(), referenced_files);
+        }
+        // The output path is the stored directory path plus the file name. A crafted
+        // archive must not be able to make two entries resolve to the same path.
+        std::vector<fs::path> dir_paths;
+        dir_paths.reserve(pack_file_handle_.GetDirectoryCount());
+        for (const auto& dir_entry : pack_file_handle_.GetDirEntryRecords())
+        {
+            const auto dir_path = pack_file_handle_.GetDirPathByDirId(dir_entry.first);
+            if (!dir_path)
+            {
+                return error_corruption("corrupt archive '{}': directory {} has no entry name", pack_file_path,
+                                        dir_entry.first);
+            }
+            dir_paths.push_back(fs::path(std::string(dir_path.value())).relative_path().lexically_normal());
+        }
+        std::ranges::sort(dir_paths);
+        for (size_t i = 1; i < dir_paths.size(); ++i)
+        {
+            if (dir_paths[i] == dir_paths[i - 1])
+            {
+                return error_corruption("corrupt archive '{}': duplicate directory path '{}'", pack_file_path,
+                                        dir_paths[i].string());
+            }
+        }
+        std::ranges::sort(file_names);
+        for (size_t i = 1; i < file_names.size(); ++i)
+        {
+            if (file_names[i].first == file_names[i - 1].first && file_names[i].second == file_names[i - 1].second)
+            {
+                return error_corruption("corrupt archive '{}': directory {} contains duplicate file name '{}'",
+                                        pack_file_path, file_names[i].first, file_names[i].second);
+            }
         }
         if (!legacy_layout_)
         {
@@ -1348,7 +1396,7 @@ namespace ctar
 
     Status BlockStore::UnPackPipeline(const std::string& input_file, const std::string& output_dir, bool force)
     {
-        Status status = RestoreBlocksFromPack(input_file);
+        Status status = RestoreBlocksFromPack(input_file, max_decompressed_file_size_);
         if (!status)
         {
             return status;

@@ -276,6 +276,86 @@ namespace ctar
             << status.error().message();
     }
 
+    TEST(DataBlobMeta, RejectsFileAboveDecompressionBudget)
+    {
+        DataBlockMeta block;
+        block.file_ids = {1};
+        block.file_orig_sizes = {2048};
+        block.file_compressed_sizes = {2048};
+        block.file_compressed_types = {CompressionType::kNone};
+        block.file_offsets = {0};
+        block.file_hashes = {0};
+        block.payload_size = 2048;
+        block.block_size = 2048;
+
+        EXPECT_TRUE(ValidateDataBlockMeta(block, {}, 2048));
+        const Status status = ValidateDataBlockMeta(block, {}, 1024);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("decompression budget"), std::string::npos)
+            << status.error().message();
+    }
+
+    TEST(DataBlobMeta, RejectsIntMaxOriginalSizeUnderDefaultBudget)
+    {
+        constexpr uint64_t kIntMax = 0x7FFFFFFFULL;
+        constexpr uint64_t kCompressed = kIntMax / 255 + 1;
+        DataBlockMeta block;
+        block.file_ids = {1};
+        block.file_orig_sizes = {kIntMax};
+        block.file_compressed_sizes = {kCompressed};
+        block.file_compressed_types = {CompressionType::kLZ4};
+        block.file_offsets = {0};
+        block.file_hashes = {0};
+        block.payload_size = kCompressed;
+        block.block_size = kCompressed;
+
+        const Status status = ValidateDataBlockMeta(block, {}, kDefaultMaxDecompressedFileSize);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("decompression budget"), std::string::npos)
+            << status.error().message();
+    }
+
+    TEST(DataBlobMeta, RejectsLz4StoredSizeBeyondApiLimit)
+    {
+        constexpr uint64_t kBeyondInt = 0x80000000ULL;
+        DataBlockMeta block;
+        block.file_ids = {1};
+        block.file_orig_sizes = {kBeyondInt};
+        block.file_compressed_sizes = {kBeyondInt};
+        block.file_compressed_types = {CompressionType::kLZ4HC};
+        block.file_offsets = {0};
+        block.file_hashes = {0};
+        block.payload_size = kBeyondInt;
+        block.block_size = kBeyondInt;
+
+        const Status status = ValidateDataBlockMeta(block);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("LZ4 entry original size"), std::string::npos)
+            << status.error().message();
+    }
+
+    TEST(DataBlobMeta, RejectsLz4EntryWithZeroOriginalSize)
+    {
+        DataBlockMeta block;
+        block.file_ids = {1};
+        block.file_orig_sizes = {0};
+        block.file_compressed_sizes = {4};
+        block.file_compressed_types = {CompressionType::kLZ4};
+        block.file_offsets = {0};
+        block.file_hashes = {0};
+        block.payload_size = 4;
+        block.block_size = 4;
+
+        const Status status = ValidateDataBlockMeta(block);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("0 original size"), std::string::npos)
+            << status.error().message();
+    }
+
     TEST(DataBlobMeta, SerializeDeserializeEmptyArrays)
     {
         DataBlockMeta src;

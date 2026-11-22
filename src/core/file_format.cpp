@@ -357,7 +357,8 @@ namespace
                            SerializedSize());
     }
 
-    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of)
+    Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of,
+                                 const uint64_t max_original_size)
     {
         const size_t file_count = block_meta.file_ids.size();
         // Every per-file vector is indexed below, so guard the shape first: this
@@ -421,6 +422,14 @@ namespace
                                         block_meta.file_offsets[i], previous_end);
             }
             previous_end = block_meta.file_offsets[i] + block_meta.file_compressed_sizes[i];
+            // A per-file budget bounds the buffer unpack allocates. The 255x check
+            // above only limits amplification; it still allows a multi-GiB expansion
+            // from a small archive.
+            if (max_original_size > 0 && block_meta.file_orig_sizes[i] > max_original_size)
+            {
+                return error_corruption("{}: original size {} exceeds the decompression budget {}", entry_label(i),
+                                        block_meta.file_orig_sizes[i], max_original_size);
+            }
             switch (block_meta.file_compressed_types[i])
             {
             case CompressionType::kNone:
@@ -440,6 +449,11 @@ namespace
                     {
                         return error_corruption("{}: compressed entry stores 0 bytes for original size {}",
                                                 entry_label(i), original);
+                    }
+                    if (original == 0 && compressed > 0)
+                    {
+                        return error_corruption("{}: compressed entry has 0 original size but stores {} bytes",
+                                                entry_label(i), compressed);
                     }
                     if (original > int_max || compressed > int_max)
                     {

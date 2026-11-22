@@ -62,6 +62,8 @@ namespace ctar::cli
         bool enable_dump_header = false;
         // Allow replacing existing entries (unpack) or an existing archive (pack).
         bool force = false;
+        // Per-file decompressed-size limit for unpack; 0 disables the limit.
+        uint64_t max_decompressed_file_size = kDefaultMaxDecompressedFileSize;
 
         std::string input_data;
         bool enable_hash_file = false;

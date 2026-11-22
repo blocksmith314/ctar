@@ -109,6 +109,41 @@ namespace ctar
         EXPECT_EQ(opt.output_path, "out.ctar");
     }
 
+    TEST(ArgParserTest, CommandUnpackMaxDecompressedSize)
+    {
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{
+                "ctar", "unpack", "--max-decompressed-size", "2G", "in.ctar", "out"};
+            const auto status = cli::ParseArgs(args, opt);
+            EXPECT_TRUE(status);
+            EXPECT_EQ(opt.cmd, cli::CommandType::UNPACK);
+            EXPECT_EQ(opt.max_decompressed_file_size, 2ULL * unit::GiB);
+        }
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{
+                "ctar", "unpack", "--max-decompressed-size", "512M", "in.ctar", "out"};
+            const auto status = cli::ParseArgs(args, opt);
+            EXPECT_TRUE(status);
+            EXPECT_EQ(opt.max_decompressed_file_size, 512ULL * unit::MiB);
+        }
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{
+                "ctar", "unpack", "--max-decompressed-size", "0", "in.ctar", "out"};
+            const auto status = cli::ParseArgs(args, opt);
+            EXPECT_TRUE(status);
+            EXPECT_EQ(opt.max_decompressed_file_size, 0U);
+        }
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{
+                "ctar", "unpack", "--max-decompressed-size", "2X", "in.ctar", "out"};
+            EXPECT_FALSE(cli::ParseArgs(args, opt));
+        }
+    }
+
     TEST(ArgParserTest, CommandPackCompressNone)
     {
         cli::CliOption opt{};
