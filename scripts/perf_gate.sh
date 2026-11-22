@@ -11,6 +11,7 @@ umask 077
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 current_build="$repo_root/build-perf"
 current_bin="$current_build/ctar"
+history_file="$repo_root/.cache/perf_gate_history.jsonl"
 
 dataset=""
 runs=5
@@ -38,7 +39,8 @@ The script builds the current tree and a cached baseline from --ref in
 Release mode, then compares `ctar pack` and `ctar unpack` with hyperfine.
 Artifacts stay in a private per-user temporary directory; the dataset is
 never modified. A normal build is needed first so that third_party/lz4
-exists.
+exists. Each run is appended to .cache/perf_gate_history.jsonl (gitignored)
+for trend review.
 EOF
 }
 
@@ -236,6 +238,31 @@ compare() {
         }'
 }
 
+append_history() {
+    local pack_json=null
+    local unpack_json=null
+    if [ -f "$tmp_root/pack.json" ]; then
+        pack_json=$(jq '.results | {baseline: .[0].summary, current: .[1].summary}' "$tmp_root/pack.json")
+    fi
+    if [ -f "$tmp_root/unpack.json" ]; then
+        unpack_json=$(jq '.results | {baseline: .[0].summary, current: .[1].summary}' "$tmp_root/unpack.json")
+    fi
+    mkdir -p "$(dirname "$history_file")"
+    jq -cn \
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg mode "$mode" \
+        --arg current "$current_commit" \
+        --arg ref "$ref" \
+        --arg baseline "$baseline_commit" \
+        --argjson runs "$runs" \
+        --argjson threads "$threads" \
+        --argjson pack "$pack_json" \
+        --argjson unpack "$unpack_json" \
+        '{timestamp: $ts, mode: $mode, runs: $runs, threads: $threads, current: $current,
+          baseline_ref: $ref, baseline: $baseline, pack: $pack, unpack: $unpack}' \
+        >> "$history_file"
+}
+
 printf 'dataset:  %s\n' "$dataset"
 printf 'baseline: %s (%s)\n' "$baseline_commit" "$ref"
 printf 'current:  %s\n' "$current_commit"
@@ -250,6 +277,8 @@ failed=0
 archive="$tmp_root/base.ctar"
 out_base="$tmp_root/out-baseline"
 out_branch="$tmp_root/out-current"
+# Only record the modes run by this invocation; the temp root is reused.
+rm -f "$tmp_root/pack.json" "$tmp_root/unpack.json"
 
 if [ "$mode" = pack ] || [ "$mode" = both ]; then
     # Flush the previous run's writes first: hyperfine runs all baseline samples
@@ -273,6 +302,7 @@ if [ "$mode" = unpack ] || [ "$mode" = both ]; then
 fi
 
 rm -rf "$out_base" "$out_branch" "$tmp_root/current.ctar"
+append_history
 
 if [ "$clean" -eq 1 ]; then
     git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
