@@ -784,22 +784,29 @@ namespace ctar
         }
         metadata_checksum_ = XXH64(meta_buffer.data(), meta_buffer.size(), kHashSeed);
 
-        std::string stored_meta = meta_buffer;
+        // The uncompressed bytes are written directly when metadata compression is
+        // disabled or does not shrink. The compression destination is raw memory:
+        // zero-filling a std::string of the worst-case size committed ~29 MiB of
+        // metadata to RSS even though the compressed output was only ~7 MiB (#93).
+        std::unique_ptr<char[]> compressed_meta;
+        const char* stored_metadata = meta_buffer.data();
+        uint64_t stored_metadata_size = meta_buffer.size();
         if (compress_metadata)
         {
-            stored_meta.assign(static_cast<size_t>(max_metadata_size), '\0');
-            const uint64_t compressed_size = compress::Compress(metadata_type, meta_buffer.data(), stored_meta.data(),
+            compressed_meta = std::make_unique_for_overwrite<char[]>(static_cast<size_t>(max_metadata_size));
+            const uint64_t compressed_size = compress::Compress(metadata_type, meta_buffer.data(), compressed_meta.get(),
                                                                 raw_meta_size, compression_param);
             if (compressed_size > 0 && compressed_size < raw_meta_size)
             {
-                stored_meta.resize(static_cast<size_t>(compressed_size));
+                stored_metadata = compressed_meta.get();
+                stored_metadata_size = compressed_size;
                 metadata_compressed_size_ = compressed_size;
                 metadata_compressed_type_ = static_cast<uint64_t>(metadata_type);
             }
             else
             {
-                // Compression did not help; keep the uncompressed bytes.
-                stored_meta = meta_buffer;
+                // Compression did not help; write the uncompressed bytes.
+                compressed_meta.reset();
             }
         }
 
@@ -838,9 +845,10 @@ namespace ctar
             fs::remove(output_pack_file);
             return status;
         }
-        if (!stored_meta.empty())
+        if (stored_metadata_size > 0)
         {
-            status = write_file->RandomWrite(static_cast<off_t>(metadata_offset), stored_meta.size(), stored_meta.data());
+            status = write_file->RandomWrite(static_cast<off_t>(metadata_offset),
+                                              static_cast<size_t>(stored_metadata_size), stored_metadata);
             if (!status)
             {
                 fs::remove(output_pack_file);
