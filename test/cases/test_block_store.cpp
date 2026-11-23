@@ -1029,6 +1029,29 @@ namespace ctar
         fs::remove_all(root);
     }
 
+    TEST(PackMetadata, PlanUsesCompressedOnlyWhenSmaller)
+    {
+        constexpr uint64_t kRaw = 4 * 1024 * 1024;
+        constexpr uint64_t kLz4 = static_cast<uint64_t>(CompressionType::kLZ4);
+        constexpr uint64_t kNone = static_cast<uint64_t>(CompressionType::kNone);
+
+        const auto compressed = PlanMetadataStorage(kRaw, kRaw - 1, kLz4);
+        EXPECT_TRUE(compressed.use_compressed);
+        EXPECT_EQ(compressed.stored_size, kRaw - 1);
+        EXPECT_EQ(compressed.header_size, kRaw - 1);
+        EXPECT_EQ(compressed.header_type, kLz4);
+
+        // Compression failure (0) and no-shrink results fall back to the raw bytes.
+        for (const uint64_t size : {uint64_t{0}, kRaw, kRaw + 1})
+        {
+            const auto fallback = PlanMetadataStorage(kRaw, size, kLz4);
+            EXPECT_FALSE(fallback.use_compressed);
+            EXPECT_EQ(fallback.stored_size, kRaw);
+            EXPECT_EQ(fallback.header_size, kRaw);
+            EXPECT_EQ(fallback.header_type, kNone);
+        }
+    }
+
 } // namespace ctar
 
 int main(int argc, char** argv)
