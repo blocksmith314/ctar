@@ -851,7 +851,7 @@ namespace ctar
             std::snprintf(rec.entry_meta.owner_name, sizeof(rec.entry_meta.owner_name), "alice");
             std::snprintf(rec.entry_meta.group_name, sizeof(rec.entry_meta.group_name), "staff");
             rec.entry_meta.modify_time = -1234567890123LL;
-            rec.entry_meta.offset = 4096;
+            rec.entry_meta.file_offset = 4096;
             rec.entry_meta.file_orig_size = 1234;
             rec.entry_meta.file_compressed_size = 999;
             return rec;
@@ -876,7 +876,7 @@ namespace ctar
         EXPECT_STREQ(decoded.owner_name, meta.owner_name);
         EXPECT_STREQ(decoded.group_name, meta.group_name);
         EXPECT_EQ(decoded.modify_time, meta.modify_time);
-        EXPECT_EQ(decoded.offset, meta.offset);
+        EXPECT_EQ(decoded.file_offset, meta.file_offset);
         EXPECT_EQ(decoded.file_orig_size, meta.file_orig_size);
         EXPECT_EQ(decoded.file_compressed_size, meta.file_compressed_size);
         EXPECT_EQ(ptr, buf.data() + buf.size());

@@ -148,7 +148,7 @@ namespace ctar
         char group_name[64];
         // modify_time: fs::last_write_time represented as unix epoch milliseconds
         long long modify_time;
-        uint64_t offset;
+        uint64_t file_offset;
         uint64_t file_orig_size;
         uint64_t file_compressed_size;
 
@@ -440,7 +440,7 @@ namespace ctar
         /// @param block_id block identifier
         /// @param offset block payload offset inside pack file
         /// @param compressed_size compressed size inside pack file
-        void SetFileEntryMeta(entry_id_t file_id, uint64_t block_id, uint64_t offset, uint64_t compressed_size);
+        void SetFileEntryMeta(entry_id_t file_id, uint64_t block_id, uint64_t file_offset, uint64_t compressed_size);
 
         /// @brief Set actual compressed payload bytes, compute block‑region padding bytes
         /// @param compressed_bytes Real size of compressed payload data

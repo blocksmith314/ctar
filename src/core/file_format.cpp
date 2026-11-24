@@ -89,7 +89,7 @@ namespace
         else
         {
             std::format_to(it, tsv::kTsvRowFormat, block_id, dir_file_ref.dir_id, dir_file_ref.file_id, permissions, owner,
-                           group, modify_time, offset, file_orig_size, file_compressed_size, dir_file_ref.dir_name,
+                           group, modify_time, file_offset, file_orig_size, file_compressed_size, dir_file_ref.dir_name,
                            dir_file_ref.file_name);
         }
     }
@@ -498,7 +498,7 @@ namespace
 
     size_t EntryMeta::SerializedSize() const noexcept
     {
-        return FixedFieldTotalSize(entry_type, permissions, block_id, owner_name, group_name, modify_time, offset,
+        return FixedFieldTotalSize(entry_type, permissions, block_id, owner_name, group_name, modify_time, file_offset,
                                    file_orig_size, file_compressed_size);
     }
 
@@ -510,7 +510,7 @@ namespace
         dst->append(owner_name, sizeof(owner_name));
         dst->append(group_name, sizeof(group_name));
         PutFixed64(dst, static_cast<uint64_t>(modify_time));
-        PutFixed64(dst, offset);
+        PutFixed64(dst, file_offset);
         PutFixed64(dst, file_orig_size);
         PutFixed64(dst, file_compressed_size);
     }
@@ -533,7 +533,7 @@ namespace
         ptr += sizeof(group_name);
         modify_time = static_cast<long long>(DecodeFixed64(ptr));
         ptr += sizeof(uint64_t);
-        offset = DecodeFixed64(ptr);
+        file_offset = DecodeFixed64(ptr);
         ptr += sizeof(uint64_t);
         file_orig_size = DecodeFixed64(ptr);
         ptr += sizeof(uint64_t);
@@ -978,11 +978,11 @@ namespace
         return (it != pack_file_meta_.dir_id_to_child_file_sizes.end()) ? it->second : kEmptyVec;
     }
 
-    void PackFileHandle::SetFileEntryMeta(const entry_id_t file_id, uint64_t block_id, const uint64_t offset,
+    void PackFileHandle::SetFileEntryMeta(const entry_id_t file_id, uint64_t block_id, const uint64_t file_offset,
                                           const uint64_t compressed_size)
     {
         pack_file_meta_.file_entry_records[file_id].entry_meta.block_id = block_id;
-        pack_file_meta_.file_entry_records[file_id].entry_meta.offset = offset;
+        pack_file_meta_.file_entry_records[file_id].entry_meta.file_offset = file_offset;
         pack_file_meta_.file_entry_records[file_id].entry_meta.file_compressed_size = compressed_size;
     }
 
@@ -1037,7 +1037,7 @@ namespace
         std::snprintf(file_meta.owner_name, std::size(file_meta.owner_name), "%s", owner_name.c_str());
         std::snprintf(file_meta.group_name, std::size(file_meta.group_name), "%s", group_name.c_str());
         file_meta.block_id = 0;
-        file_meta.offset = 0;
+        file_meta.file_offset = 0;
         return file_meta;
     }
 

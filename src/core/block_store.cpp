@@ -1351,7 +1351,7 @@ namespace ctar
                     file_data_offset_ + block_meta.block_file_offset + block_meta.file_offsets[f];
                 if (entry.block_id != block_meta.block_id || entry.file_orig_size != block_meta.file_orig_sizes[f] ||
                     entry.file_compressed_size != block_meta.file_compressed_sizes[f] ||
-                    entry.offset != absolute_offset)
+                    entry.file_offset != absolute_offset)
                 {
                     return error_corruption(
                         "corrupt archive '{}': file '{}' in data block {} disagrees with the entry index",
