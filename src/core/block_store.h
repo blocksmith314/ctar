@@ -30,6 +30,26 @@ namespace ctar
         Extract
     };
 
+    /// @brief Where the serialized metadata is stored and what the header records.
+    struct MetadataStoragePlan
+    {
+        bool use_compressed = false;
+        uint64_t stored_size = 0; // bytes written to the archive
+        uint64_t header_size = 0; // metadata_compressed_size
+        uint64_t header_type = 0; // metadata_compressed_type
+    };
+
+    /// @brief Choose between the compressed and raw metadata bytes.
+    ///
+    /// Compression is used only when it succeeded and produced a smaller buffer.
+    /// Otherwise the raw bytes are stored and the header records kNone, so the
+    /// fallback path is explicit and testable.
+    /// @param raw_size uncompressed metadata size
+    /// @param compressed_size result from Compress(); 0 means failure
+    /// @param compressed_type compression type that was attempted
+    [[nodiscard]] MetadataStoragePlan PlanMetadataStorage(uint64_t raw_size, uint64_t compressed_size,
+                                                          uint64_t compressed_type);
+
 
     /// @brief XXH64 of a file's contents, using the archive hash seed.
     ResultStatus<uint64_t> Hash(const std::string& file_path);

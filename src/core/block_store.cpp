@@ -67,6 +67,22 @@ namespace ctar
         return XXH64(buf.data(), buf.size(), kHashSeed);
     }
 
+    MetadataStoragePlan PlanMetadataStorage(const uint64_t raw_size, const uint64_t compressed_size,
+                                            const uint64_t compressed_type)
+    {
+        if (compressed_size > 0 && compressed_size < raw_size)
+        {
+            return {.use_compressed = true,
+                    .stored_size = compressed_size,
+                    .header_size = compressed_size,
+                    .header_type = compressed_type};
+        }
+        return {.use_compressed = false,
+                .stored_size = raw_size,
+                .header_size = raw_size,
+                .header_type = static_cast<uint64_t>(CompressionType::kNone)};
+    }
+
 
     namespace
     {
@@ -789,26 +805,29 @@ namespace ctar
         // zero-filling a std::string of the worst-case size committed ~29 MiB of
         // metadata to RSS even though the compressed output was only ~7 MiB (#93).
         std::unique_ptr<char[]> compressed_meta;
-        const char* stored_metadata = meta_buffer.data();
-        uint64_t stored_metadata_size = meta_buffer.size();
+        uint64_t compressed_size = 0;
         if (compress_metadata)
         {
             compressed_meta = std::make_unique_for_overwrite<char[]>(static_cast<size_t>(max_metadata_size));
-            const uint64_t compressed_size = compress::Compress(metadata_type, meta_buffer.data(), compressed_meta.get(),
-                                                                raw_meta_size, compression_param);
-            if (compressed_size > 0 && compressed_size < raw_meta_size)
-            {
-                stored_metadata = compressed_meta.get();
-                stored_metadata_size = compressed_size;
-                metadata_compressed_size_ = compressed_size;
-                metadata_compressed_type_ = static_cast<uint64_t>(metadata_type);
-            }
-            else
-            {
-                // Compression did not help; write the uncompressed bytes.
-                compressed_meta.reset();
-            }
+            compressed_size =
+                compress::Compress(metadata_type, meta_buffer.data(), compressed_meta.get(), raw_meta_size,
+                                   compression_param);
         }
+        const MetadataStoragePlan metadata_plan =
+            PlanMetadataStorage(raw_meta_size, compressed_size, static_cast<uint64_t>(metadata_type));
+        const char* stored_metadata = meta_buffer.data();
+        if (metadata_plan.use_compressed)
+        {
+            stored_metadata = compressed_meta.get();
+        }
+        else
+        {
+            // Compression was not used or did not help; write the raw bytes.
+            compressed_meta.reset();
+        }
+        const uint64_t stored_metadata_size = metadata_plan.stored_size;
+        metadata_compressed_size_ = metadata_plan.header_size;
+        metadata_compressed_type_ = metadata_plan.header_type;
 
         const uint64_t metadata_offset = file_data_offset_ + block_region_size_;
         const uint64_t pack_file_size = metadata_offset + metadata_compressed_size_ + sizeof(kMagicNumber);
