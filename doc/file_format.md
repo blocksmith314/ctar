@@ -120,7 +120,7 @@ data_block_meta[data_block_count]
 | 32 | 64 | `entry_meta.owner_name` | NUL-padded |
 | 96 | 64 | `entry_meta.group_name` | NUL-padded |
 | 160 | 8 | `entry_meta.modify_time` | `i64`, unix epoch milliseconds |
-| 168 | 8 | `entry_meta.offset` | file payload offset inside the block |
+| 168 | 8 | `entry_meta.file_offset` | absolute offset of the file payload from the start of the archive (`file_data_offset + block_file_offset + DataBlockMeta.file_offsets[i]`) |
 | 176 | 8 | `entry_meta.file_orig_size` | original file size |
 | 184 | 8 | `entry_meta.file_compressed_size` | stored (compressed) size |
 
@@ -150,10 +150,12 @@ The 4-byte `magic_number` (`CTAR`) follows the metadata at `metadata_offset + me
 
 ### locating a file payload
 
-1. Read `file_entry_records[id]`; take `entry_meta.block_id`, `entry_meta.offset`, `entry_meta.file_compressed_size`.
+1. Read `file_entry_records[id]`; take `entry_meta.block_id`, `entry_meta.file_offset`, `entry_meta.file_compressed_size`.
 2. Read `data_block_metas[block_id]`; its payload starts at `file_data_offset + block_file_offset`.
-3. The file bytes are at `payload_start + entry_meta.offset`, `file_compressed_size` bytes long.
+3. The file bytes are at `entry_meta.file_offset`, `file_compressed_size` bytes long. Equivalently, the block-relative offset is `data_block_metas[block_id].file_offsets[index]`, where `index` is the position of `id` in `file_ids`; the absolute position is `payload_start + file_offsets[index]`.
 4. Decompress according to `file_compressed_types`; verify `file_hashes`.
+
+`dump`'s `offset` column reports this absolute `entry_meta.file_offset`; `ls` does not display it.
 
 ### reader validation contracts
 
@@ -162,7 +164,7 @@ The reader rejects archives that violate these cross-field invariants; a writer 
 - `file_ids` are strictly increasing within a block, so a block cannot reference the same file twice.
 - File ranges (`file_offsets` + `file_compressed_sizes`) are ordered, non-overlapping, and fit inside `payload_size`.
 - For `kLZ4`/`kLZ4HC`, `file_orig_sizes` and `file_compressed_sizes` fit the LZ4 `int` API, `file_orig_sizes <= 255 * file_compressed_sizes`, and a zero original size requires a zero stored size.
-- Every `file_ids[i]` exists in `file_entry_records`; the entry's `block_id`, `file_orig_size`, `file_compressed_size` and absolute `offset` agree with the block, and every indexed file is referenced exactly once.
+- Every `file_ids[i]` exists in `file_entry_records`; the entry's `block_id`, `file_orig_size`, `file_compressed_size` and absolute `file_offset` agree with the block, and every indexed file is referenced exactly once.
 - Directory paths are unique, and a directory contains no duplicate file names, so every extracted file has a distinct output path.
 - `unpack` enforces a per-file decompressed-size budget (`--max-decompressed-size`, default 1 GiB, `0` disables it). Archives with larger files need a larger budget or chunked files (#38).
 

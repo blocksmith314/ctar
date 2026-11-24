@@ -119,7 +119,7 @@ data_block_meta[data_block_count]
 | 32 | 64 | `entry_meta.owner_name` | NUL 填充 |
 | 96 | 64 | `entry_meta.group_name` | NUL 填充 |
 | 160 | 8 | `entry_meta.modify_time` | `i64`，Unix epoch 毫秒 |
-| 168 | 8 | `entry_meta.offset` | 文件 payload 在块内的偏移 |
+| 168 | 8 | `entry_meta.file_offset` | 文件 payload 从归档起点算起的绝对偏移（`file_data_offset + block_file_offset + DataBlockMeta.file_offsets[i]`） |
 | 176 | 8 | `entry_meta.file_orig_size` | 文件原始大小 |
 | 184 | 8 | `entry_meta.file_compressed_size` | 存储（压缩后）大小 |
 
@@ -148,10 +148,12 @@ data_block_meta[data_block_count]
 
 ### 定位文件 payload
 
-1. 读取 `file_entry_records[id]`，取出 `entry_meta.block_id`、`entry_meta.offset`、`entry_meta.file_compressed_size`。
+1. 读取 `file_entry_records[id]`，取出 `entry_meta.block_id`、`entry_meta.file_offset`、`entry_meta.file_compressed_size`。
 2. 读取 `data_block_metas[block_id]`，其 payload 起点为 `file_data_offset + block_file_offset`。
-3. 文件数据位于 `payload_start + entry_meta.offset`，长度为 `file_compressed_size` 字节。
+3. 文件数据位于 `entry_meta.file_offset`，长度为 `file_compressed_size` 字节。等价地，块内相对偏移是 `data_block_metas[block_id].file_offsets[index]`（`index` 是 `id` 在 `file_ids` 中的位置），绝对位置为 `payload_start + file_offsets[index]`。
 4. 按 `file_compressed_types` 解压，并用 `file_hashes` 校验。
+
+`dump` 的 `offset` 列显示这个绝对值；`ls` 不显示 offset。
 
 ### 读取端校验约束
 
@@ -160,7 +162,7 @@ data_block_meta[data_block_count]
 - 块内 `file_ids` 严格递增，同一块不能引用同一个文件两次。
 - 文件区间（`file_offsets` + `file_compressed_sizes`）有序、互不重叠，且都位于 `payload_size` 内。
 - 对 `kLZ4`/`kLZ4HC`，`file_orig_sizes` 和 `file_compressed_sizes` 必须落在 LZ4 的 `int` API 范围内，`file_orig_sizes <= 255 * file_compressed_sizes`，且原始大小为 0 时存储大小也必须为 0。
-- 每个 `file_ids[i]` 都必须存在于 `file_entry_records`，其 `block_id`、`file_orig_size`、`file_compressed_size` 和绝对 `offset` 与块元数据一致；所有索引文件都必须被且仅被引用一次。
+- 每个 `file_ids[i]` 都必须存在于 `file_entry_records`，其 `block_id`、`file_orig_size`、`file_compressed_size` 和绝对 `file_offset` 与块元数据一致；所有索引文件都必须被且仅被引用一次。
 - 目录路径唯一，同一目录内文件名唯一，保证每个解压文件有唯一的输出路径。
 - `unpack` 对每个文件施加解压大小预算（`--max-decompressed-size`，默认 1 GiB，`0` 表示不限制）。更大的文件需要调大预算，或等待分块支持（#38）。
 
