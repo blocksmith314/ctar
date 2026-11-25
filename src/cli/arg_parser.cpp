@@ -84,6 +84,11 @@ COMMAND OPTIONS
             Per-file decompressed-size limit (default 1G, 0 = unlimited).
             Files above it are rejected during unpack.
 
+        --max-metadata-size SIZE
+            Per-archive limit on stored and uncompressed metadata for
+            unpack/tree/ls/dump/stat (default 1G, 0 = unlimited). Larger
+            metadata is rejected before it is allocated.
+
     ls:
         -h
             Print sizes in human-readable form (1024-based: K, M, G).
@@ -318,6 +323,21 @@ namespace ctar::cli
                 opt.max_decompressed_file_size = size;
                 ++pos;
             }
+            else if (op == "--max-metadata-size" && subcommand_name == "unpack")
+            {
+                ++pos;
+                if (pos >= argc)
+                {
+                    return error_invalid_arg("missing size after {}", op);
+                }
+                uint64_t size = 0;
+                if (!ParseSize(argv[pos], size))
+                {
+                    return error_invalid_arg("invalid size '{}' for {}; use e.g. 512M or 1G", argv[pos], op);
+                }
+                opt.max_metadata_size = size;
+                ++pos;
+            }
             else
             {
                 return error_invalid_arg("unknown option for {}: {}", subcommand_name, op);
@@ -390,6 +410,29 @@ namespace ctar::cli
             {
                 opt.cmd = CommandType::STAT;
                 pos++;
+                while (pos < argc && argv[pos][0] == '-')
+                {
+                    std::string_view op{argv[pos]};
+                    if (op == "--max-metadata-size")
+                    {
+                        ++pos;
+                        if (pos >= argc)
+                        {
+                            return error_invalid_arg("missing size after {}", op);
+                        }
+                        uint64_t size = 0;
+                        if (!ParseSize(argv[pos], size))
+                        {
+                            return error_invalid_arg("invalid size '{}' for {}; use e.g. 512M or 1G", argv[pos], op);
+                        }
+                        opt.max_metadata_size = size;
+                    }
+                    else
+                    {
+                        return error_invalid_arg("unknown option for stat: {}", op);
+                    }
+                    pos++;
+                }
                 int remain_argc = argc - pos;
                 if (remain_argc != 1)
                 {
@@ -456,6 +499,20 @@ namespace ctar::cli
                         opt.enable_tree_dir_only = true;
                     else if (op == "-s")
                         opt.enable_tree_stats = true;
+                    else if (op == "--max-metadata-size")
+                    {
+                        ++pos;
+                        if (pos >= argc)
+                        {
+                            return error_invalid_arg("missing size after {}", op);
+                        }
+                        uint64_t size = 0;
+                        if (!ParseSize(argv[pos], size))
+                        {
+                            return error_invalid_arg("invalid size '{}' for {}; use e.g. 512M or 1G", argv[pos], op);
+                        }
+                        opt.max_metadata_size = size;
+                    }
                     else
                     {
                         return error_invalid_arg("unknown option for tree: {}", op);
@@ -496,6 +553,20 @@ namespace ctar::cli
                     std::string_view op{argv[pos]};
                     if (op == "-h")
                         opt.enable_human_readable = true;
+                    else if (op == "--max-metadata-size")
+                    {
+                        ++pos;
+                        if (pos >= argc)
+                        {
+                            return error_invalid_arg("missing size after {}", op);
+                        }
+                        uint64_t size = 0;
+                        if (!ParseSize(argv[pos], size))
+                        {
+                            return error_invalid_arg("invalid size '{}' for {}; use e.g. 512M or 1G", argv[pos], op);
+                        }
+                        opt.max_metadata_size = size;
+                    }
                     else
                     {
                         return error_invalid_arg("unknown option for ls: {}", op);
@@ -549,6 +620,20 @@ namespace ctar::cli
                     else if (op == "-H")
                     {
                         opt.enable_dump_header = true;
+                    }
+                    else if (op == "--max-metadata-size")
+                    {
+                        ++pos;
+                        if (pos >= argc)
+                        {
+                            return error_invalid_arg("missing size after {}", op);
+                        }
+                        uint64_t size = 0;
+                        if (!ParseSize(argv[pos], size))
+                        {
+                            return error_invalid_arg("invalid size '{}' for {}; use e.g. 512M or 1G", argv[pos], op);
+                        }
+                        opt.max_metadata_size = size;
                     }
                     else
                     {
@@ -626,6 +711,7 @@ namespace ctar::cli
         unsigned hw_thread_cnt = (hw == 0) ? 1 : (hw);
         unsigned worker_thread_cnt = opt.thread_cnt > 0 ? opt.thread_cnt : hw_thread_cnt;
         BlockStore store(worker_thread_cnt, opt.comp_config);
+        store.SetMaxMetadataSize(opt.max_metadata_size);
         switch (opt.cmd)
         {
         case CommandType::HELP:

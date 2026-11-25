@@ -4,6 +4,7 @@
 #include <fstream>
 #include <grp.h>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <ranges>
 #include <sys/uio.h>
@@ -1121,17 +1122,58 @@ namespace ctar
                 return error_corruption("corrupt archive '{}': metadata size {} exceeds the file size {}",
                                         pack_file_path, header.metadata_compressed_size, file_size);
             }
-            // Bound the allocation for a maliciously large uncompressed metadata size.
-            constexpr uint64_t kMaxMetadataSize = 4ULL * 1024 * 1024 * 1024;
-            if (header.metadata_original_size == 0 || header.metadata_original_size > kMaxMetadataSize ||
-                header.metadata_compressed_size == 0)
+            if (header.metadata_original_size == 0 || header.metadata_compressed_size == 0)
             {
                 return error_corruption("corrupt archive '{}': impossible metadata sizes", pack_file_path);
             }
-            if (header.metadata_compressed_type != static_cast<uint64_t>(CompressionType::kNone) &&
-                header.metadata_original_size / header.metadata_compressed_size > 255)
+            // The metadata size is untrusted: compression can amplify a small region by
+            // up to 255x, and parsing allocates the full size plus the block metadata
+            // vector. Refuse it before allocating anything.
+            if (max_metadata_size_ > 0 && header.metadata_original_size > max_metadata_size_)
             {
-                return error_corruption("corrupt archive '{}': impossible metadata compression ratio", pack_file_path);
+                return error_corruption(
+                    "archive '{}': metadata size {} exceeds the configured limit {} "
+                    "(use --max-metadata-size to raise it)",
+                    pack_file_path, header.metadata_original_size, max_metadata_size_);
+            }
+            const bool compressed_metadata =
+                header.metadata_compressed_type != static_cast<uint64_t>(CompressionType::kNone);
+            if (compressed_metadata)
+            {
+                // The stored buffer is allocated before decompression too, so it needs
+                // the same budget and the same LZ4 int bound as the output.
+                if (max_metadata_size_ > 0 && header.metadata_compressed_size > max_metadata_size_)
+                {
+                    return error_corruption(
+                        "archive '{}': stored metadata size {} exceeds the configured limit {} "
+                        "(use --max-metadata-size to raise it)",
+                        pack_file_path, header.metadata_compressed_size, max_metadata_size_);
+                }
+                if (header.metadata_original_size > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+                {
+                    return error_corruption(
+                        "corrupt archive '{}': uncompressed metadata size {} exceeds the LZ4 limit", pack_file_path,
+                        header.metadata_original_size);
+                }
+                if (header.metadata_compressed_size > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+                {
+                    return error_corruption(
+                        "corrupt archive '{}': compressed metadata size {} exceeds the LZ4 limit", pack_file_path,
+                        header.metadata_compressed_size);
+                }
+                // Pack stores compressed metadata only when it is strictly smaller;
+                // equal or larger sizes are the raw/kNone fallback.
+                if (header.metadata_compressed_size >= header.metadata_original_size)
+                {
+                    return error_corruption(
+                        "corrupt archive '{}': compressed metadata is not smaller than its original size",
+                        pack_file_path);
+                }
+                if (header.metadata_original_size / header.metadata_compressed_size > 255)
+                {
+                    return error_corruption("corrupt archive '{}': impossible metadata compression ratio",
+                                            pack_file_path);
+                }
             }
             if (!IsValidCompressionType(header.file_data_compressed_type) ||
                 !IsValidCompressionType(header.metadata_compressed_type))
@@ -1167,6 +1209,12 @@ namespace ctar
             return error_corruption("corrupt archive '{}': metadata size {} exceeds the file size {}", pack_file_path,
                                     header.file_meta_size, file_size);
         }
+        if (max_metadata_size_ > 0 && header.file_meta_size > max_metadata_size_)
+        {
+            return error_corruption(
+                "archive '{}': legacy metadata size {} exceeds the configured limit {}", pack_file_path,
+                header.file_meta_size, max_metadata_size_);
+        }
         legacy_layout_ = true;
         pack_file_header_ = PackFileHeader{};
         legacy_file_meta_size_ = header.file_meta_size;
@@ -1195,55 +1243,58 @@ namespace ctar
         }
         auto& read_file = read_file_status.value();
 
-        std::string metadata_bytes;
+        std::unique_ptr<char[]> metadata_storage;
+        uint64_t metadata_size = 0;
         if (legacy_layout_)
         {
-            metadata_bytes.assign(static_cast<size_t>(legacy_file_meta_size_), '\0');
+            metadata_storage = std::make_unique_for_overwrite<char[]>(static_cast<size_t>(legacy_file_meta_size_));
             auto read_status =
                 read_file->RandomRead(static_cast<off_t>(LegacyPackFileHeader::kSerializedSize),
-                                      legacy_file_meta_size_, metadata_bytes.data());
+                                      legacy_file_meta_size_, metadata_storage.get());
             if (!read_status || read_status.value() != static_cast<size_t>(legacy_file_meta_size_))
             {
                 return error_io("fail to read metadata from {}", pack_file_path);
             }
+            metadata_size = legacy_file_meta_size_;
         }
         else
         {
-            std::string stored(static_cast<size_t>(metadata_compressed_size_), '\0');
-            if (!stored.empty())
+            // Both buffers are uninitialized: zero-filling the metadata would commit
+            // its full declared size to RSS before decompression has a chance to fail.
+            auto stored = std::make_unique_for_overwrite<char[]>(static_cast<size_t>(metadata_compressed_size_));
+            auto read_status = read_file->RandomRead(static_cast<off_t>(pack_file_header_.metadata_offset),
+                                                     metadata_compressed_size_, stored.get());
+            if (!read_status || read_status.value() != static_cast<size_t>(metadata_compressed_size_))
             {
-                auto read_status = read_file->RandomRead(static_cast<off_t>(pack_file_header_.metadata_offset),
-                                                         metadata_compressed_size_, stored.data());
-                if (!read_status || read_status.value() != static_cast<size_t>(metadata_compressed_size_))
-                {
-                    return error_io("fail to read metadata from {}", pack_file_path);
-                }
+                return error_io("fail to read metadata from {}", pack_file_path);
             }
             const auto metadata_type = static_cast<CompressionType>(metadata_compressed_type_);
             if (metadata_type == CompressionType::kNone)
             {
-                metadata_bytes = std::move(stored);
+                metadata_storage = std::move(stored);
+                metadata_size = metadata_compressed_size_;
             }
             else
             {
-                metadata_bytes.assign(static_cast<size_t>(metadata_original_size_), '\0');
+                metadata_storage = std::make_unique_for_overwrite<char[]>(static_cast<size_t>(metadata_original_size_));
                 const uint64_t decompressed_size =
-                    compress::Decompress(metadata_type, stored.data(), metadata_bytes.data(),
+                    compress::Decompress(metadata_type, stored.get(), metadata_storage.get(),
                                          metadata_compressed_size_, metadata_original_size_);
                 if (decompressed_size != metadata_original_size_)
                 {
                     return error_corruption("corrupt archive '{}': failed to decompress metadata", pack_file_path);
                 }
+                metadata_size = metadata_original_size_;
             }
-            const uint64_t checksum = XXH64(metadata_bytes.data(), metadata_bytes.size(), kHashSeed);
+            const uint64_t checksum = XXH64(metadata_storage.get(), metadata_size, kHashSeed);
             if (checksum != metadata_checksum_)
             {
                 return error_corruption("corrupt archive '{}': metadata checksum mismatch", pack_file_path);
             }
         }
 
-        const char* meta_ptr = metadata_bytes.data();
-        const char* const meta_end = metadata_bytes.data() + metadata_bytes.size();
+        const char* meta_ptr = metadata_storage.get();
+        const char* const meta_end = meta_ptr + static_cast<size_t>(metadata_size);
         s = pack_file_handle_.DeserializePackFileMeta(meta_ptr, meta_end);
         if (!s)
         {
@@ -1255,7 +1306,10 @@ namespace ctar
         }
         const auto data_block_count = DecodeFixed64(meta_ptr);
         meta_ptr += sizeof(uint64_t);
-        constexpr uint64_t kMinDataBlockMetaSize = 12 * sizeof(uint64_t);
+        // A block must contain at least one file (ValidateDataBlockMeta rejects empty
+        // blocks), and the smallest one serializes to 137 bytes: six fixed u64, six
+        // vector counts, one id/size/offset/hash each, and one compression type byte.
+        constexpr uint64_t kMinDataBlockMetaSize = 17 * sizeof(uint64_t) + sizeof(uint8_t);
         if (data_block_count > static_cast<uint64_t>(meta_end - meta_ptr) / kMinDataBlockMetaSize)
         {
             return error_corruption("corrupt archive '{}': data block count {} is impossible", pack_file_path,
@@ -1279,24 +1333,28 @@ namespace ctar
         };
 
         data_block_metas_.clear();
-        data_block_metas_.resize(static_cast<size_t>(data_block_count));
+        // Grow with the blocks that actually parse instead of trusting the declared
+        // count up front; a crafted count must not allocate the whole vector before
+        // the metadata has been read.
+        data_block_metas_.reserve(static_cast<size_t>(std::min<uint64_t>(data_block_count, 1024)));
         // Cross-block and cross-index checks. Together with the per-block range checks
         // this prevents a hostile archive from reusing the same compressed bytes, or the
         // same output path, through several block entries.
         std::vector<std::pair<uint64_t, uint64_t>> block_ranges;
-        block_ranges.reserve(data_block_metas_.size());
+        block_ranges.reserve(data_block_metas_.capacity());
         std::unordered_set<uint64_t> block_ids;
         const auto& file_records = pack_file_handle_.GetFileEntryRecords();
         std::vector<std::pair<entry_id_t, std::string_view>> file_names;
         file_names.reserve(file_records.size());
-        for (size_t i = 0; i < data_block_metas_.size(); ++i)
+        for (uint64_t i = 0; i < data_block_count; ++i)
         {
-            s = data_block_metas_[i].Deserialize(meta_ptr, meta_end);
+            data_block_metas_.emplace_back();
+            auto& block_meta = data_block_metas_.back();
+            s = block_meta.Deserialize(meta_ptr, meta_end);
             if (!s)
             {
                 return s;
             }
-            const auto& block_meta = data_block_metas_[i];
             if (block_meta.block_size > block_region_size_ ||
                 block_meta.block_file_offset > block_region_size_ - block_meta.block_size)
             {
@@ -1316,7 +1374,7 @@ namespace ctar
                                       block_meta.block_file_offset + block_meta.block_size);
             if (auto dir_path = pack_file_handle_.GetDirPathByDirId(block_meta.dir_id))
             {
-                data_block_metas_[i].dir_stats.dir_path = dir_path.value();
+                block_meta.dir_stats.dir_path = dir_path.value();
             }
             else
             {

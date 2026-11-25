@@ -144,6 +144,48 @@ namespace ctar
         }
     }
 
+    TEST(ArgParserTest, CommandMaxMetadataSize)
+    {
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "unpack", "--max-metadata-size", "512M", "in.ctar",
+                                                     "out"};
+            ASSERT_TRUE(cli::ParseArgs(args, opt));
+            EXPECT_EQ(opt.max_metadata_size, 512ULL * 1024 * 1024);
+        }
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "tree", "--max-metadata-size", "2G", "a.ctar"};
+            ASSERT_TRUE(cli::ParseArgs(args, opt));
+            EXPECT_EQ(opt.max_metadata_size, 2ULL * 1024 * 1024 * 1024);
+            EXPECT_EQ(opt.pack_file_path, "a.ctar");
+        }
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "ls", "--max-metadata-size", "0", "a.ctar"};
+            ASSERT_TRUE(cli::ParseArgs(args, opt));
+            EXPECT_EQ(opt.max_metadata_size, 0U);
+        }
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "dump", "--max-metadata-size", "1M", "a.ctar"};
+            ASSERT_TRUE(cli::ParseArgs(args, opt));
+            EXPECT_EQ(opt.max_metadata_size, 1ULL * 1024 * 1024);
+        }
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "stat", "--max-metadata-size", "1G", "a.ctar"};
+            ASSERT_TRUE(cli::ParseArgs(args, opt));
+            EXPECT_EQ(opt.max_metadata_size, 1ULL * 1024 * 1024 * 1024);
+        }
+        {
+            cli::CliOption opt{};
+            const std::vector<std::string_view> args{"ctar", "unpack", "--max-metadata-size", "2X", "in.ctar",
+                                                     "out"};
+            EXPECT_FALSE(cli::ParseArgs(args, opt));
+        }
+    }
+
     TEST(ArgParserTest, CommandPackCompressNone)
     {
         cli::CliOption opt{};

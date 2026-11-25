@@ -198,6 +198,8 @@ namespace ctar
         unsigned thread_cnt_ = 1;
         // Per-file decompression budget for unpack; 0 means unlimited.
         uint64_t max_decompressed_file_size_ = kDefaultMaxDecompressedFileSize;
+        // Per-archive uncompressed metadata budget for every reader; 0 means unlimited.
+        uint64_t max_metadata_size_ = kDefaultMaxMetadataSize;
 
         [[nodiscard]] uint64_t GetRawMetaSize() const;
 
@@ -277,6 +279,9 @@ namespace ctar
 
         /// @brief Set the per-file decompression budget used by unpack (0 = unlimited).
         void SetMaxDecompressedFileSize(const uint64_t bytes) { max_decompressed_file_size_ = bytes; }
+
+        /// @brief Set the per-archive uncompressed metadata budget (0 = unlimited).
+        void SetMaxMetadataSize(const uint64_t bytes) { max_metadata_size_ = bytes; }
 
         [[nodiscard]] Status CreateUnpackDir();
 

@@ -64,6 +64,8 @@ namespace ctar::cli
         bool force = false;
         // Per-file decompressed-size limit for unpack; 0 disables the limit.
         uint64_t max_decompressed_file_size = kDefaultMaxDecompressedFileSize;
+        // Per-archive uncompressed metadata limit for archive readers; 0 disables it.
+        uint64_t max_metadata_size = kDefaultMaxMetadataSize;
 
         std::string input_data;
         bool enable_hash_file = false;

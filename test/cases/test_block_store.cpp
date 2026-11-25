@@ -833,6 +833,99 @@ namespace ctar
         fixture.Cleanup();
     }
 
+    TEST(MetadataBudget, RejectsMetadataAboveLimit)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        BlockStore store;
+        store.SetMaxMetadataSize(1);
+        const Status status = store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string(), true);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("metadata size"), std::string::npos)
+            << status.error().message();
+        fixture.Cleanup();
+    }
+
+    TEST(MetadataBudget, ZeroDisablesLimit)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        BlockStore store;
+        store.SetMaxMetadataSize(0);
+        EXPECT_TRUE(store.UnPackPipeline(fixture.archive.string(), fixture.out_dir.string(), true));
+        fixture.Cleanup();
+    }
+
+    TEST(MetadataBudget, RejectsUncompressedMetadataAboveLz4Limit)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        std::string bytes = fixture.Bytes();
+        constexpr size_t kMetadataOriginalSizeOffset = 104;
+        constexpr size_t kMetadataCompressedSizeOffset = 112;
+        constexpr size_t kMetadataCompressedTypeOffset = 120;
+        WriteU64At(bytes, kMetadataOriginalSizeOffset, 0x80000000ULL);
+        WriteU64At(bytes, kMetadataCompressedSizeOffset, 1);
+        WriteU64At(bytes, kMetadataCompressedTypeOffset, static_cast<uint64_t>(CompressionType::kLZ4));
+        WriteWholeFile(fixture.archive.string(), bytes);
+
+        BlockStore store;
+        store.SetMaxMetadataSize(0);
+        const Status status = store.ReadPackHeaderOnly(fixture.archive.string());
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("LZ4 limit"), std::string::npos)
+            << status.error().message();
+        fixture.Cleanup();
+    }
+
+    TEST(MetadataBudget, RejectsStoredMetadataAboveBudget)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        std::string bytes = fixture.Bytes();
+        constexpr size_t kMetadataOriginalSizeOffset = 104;
+        constexpr size_t kMetadataCompressedSizeOffset = 112;
+        constexpr size_t kMetadataCompressedTypeOffset = 120;
+        WriteU64At(bytes, kMetadataOriginalSizeOffset, 100);
+        WriteU64At(bytes, kMetadataCompressedSizeOffset, 150);
+        WriteU64At(bytes, kMetadataCompressedTypeOffset, static_cast<uint64_t>(CompressionType::kLZ4));
+        WriteWholeFile(fixture.archive.string(), bytes);
+
+        BlockStore store;
+        store.SetMaxMetadataSize(120);
+        const Status status = store.ReadPackHeaderOnly(fixture.archive.string());
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("stored metadata size"), std::string::npos)
+            << status.error().message();
+        fixture.Cleanup();
+    }
+
+    TEST(MetadataBudget, RejectsCompressedMetadataNotSmallerThanOriginal)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        std::string bytes = fixture.Bytes();
+        constexpr size_t kMetadataOriginalSizeOffset = 104;
+        constexpr size_t kMetadataCompressedSizeOffset = 112;
+        constexpr size_t kMetadataCompressedTypeOffset = 120;
+        WriteU64At(bytes, kMetadataOriginalSizeOffset, 100);
+        WriteU64At(bytes, kMetadataCompressedSizeOffset, 100);
+        WriteU64At(bytes, kMetadataCompressedTypeOffset, static_cast<uint64_t>(CompressionType::kLZ4));
+        WriteWholeFile(fixture.archive.string(), bytes);
+
+        BlockStore store;
+        store.SetMaxMetadataSize(0);
+        const Status status = store.ReadPackHeaderOnly(fixture.archive.string());
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("not smaller"), std::string::npos)
+            << status.error().message();
+        fixture.Cleanup();
+    }
+
 
     namespace
     {

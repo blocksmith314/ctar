@@ -46,6 +46,11 @@ namespace ctar
     // override the limit with --max-decompressed-size.
     constexpr uint64_t kDefaultMaxDecompressedFileSize = 1ULL * unit::GiB;
 
+    // Default per-archive limit for the uncompressed metadata region. Readers
+    // reject larger metadata before allocating it; the CLI can override it with
+    // --max-metadata-size (0 disables the limit).
+    constexpr uint64_t kDefaultMaxMetadataSize = 1ULL * unit::GiB;
+
     // Thread-local read/block buffers larger than this are trimmed back to this
     // size after a task, instead of being held until the process exits.
     constexpr size_t kMaxRetainedBufferBytes = 128UL * unit::MiB;
