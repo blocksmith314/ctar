@@ -370,6 +370,12 @@ namespace
         {
             return error_corruption("block {}: per-file vectors have different lengths", block_meta.block_id);
         }
+        // Pack never emits an empty block; rejecting them also keeps the minimum
+        // serialized block size (and therefore the block-count bound) meaningful.
+        if (file_count == 0)
+        {
+            return error_corruption("block {}: contains no files", block_meta.block_id);
+        }
 
         // The stored path is resolved only when there is an error to report, so valid
         // blocks pay no lookup cost. When it is unavailable, fall back to the entry's

@@ -359,6 +359,17 @@ namespace ctar
             << status.error().message();
     }
 
+    TEST(DataBlobMeta, RejectsEmptyBlock)
+    {
+        DataBlockMeta block;
+        block.block_id = 7;
+        const Status status = ValidateDataBlockMeta(block);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("contains no files"), std::string::npos)
+            << status.error().message();
+    }
+
     TEST(DataBlobMeta, SerializeDeserializeEmptyArrays)
     {
         DataBlockMeta src;

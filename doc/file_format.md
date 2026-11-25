@@ -167,6 +167,7 @@ The reader rejects archives that violate these cross-field invariants; a writer 
 - Every `file_ids[i]` exists in `file_entry_records`; the entry's `block_id`, `file_orig_size`, `file_compressed_size` and absolute `file_offset` agree with the block, and every indexed file is referenced exactly once.
 - Directory paths are unique, and a directory contains no duplicate file names, so every extracted file has a distinct output path.
 - `unpack` enforces a per-file decompressed-size budget (`--max-decompressed-size`, default 1 GiB, `0` disables it). Archives with larger files need a larger budget or chunked files (#38).
+- All archive readers enforce a per-archive metadata budget (`--max-metadata-size`, default 1 GiB, `0` disables it) before allocating the uncompressed metadata. Compressed metadata above the LZ4 `int` limit is always rejected, and empty data blocks are invalid.
 
 ### version encoding and compatibility
 

@@ -165,6 +165,7 @@ data_block_meta[data_block_count]
 - 每个 `file_ids[i]` 都必须存在于 `file_entry_records`，其 `block_id`、`file_orig_size`、`file_compressed_size` 和绝对 `file_offset` 与块元数据一致；所有索引文件都必须被且仅被引用一次。
 - 目录路径唯一，同一目录内文件名唯一，保证每个解压文件有唯一的输出路径。
 - `unpack` 对每个文件施加解压大小预算（`--max-decompressed-size`，默认 1 GiB，`0` 表示不限制）。更大的文件需要调大预算，或等待分块支持（#38）。
+- 所有归档读取命令都在分配未压缩 metadata 之前施加每归档 metadata 预算（`--max-metadata-size`，默认 1 GiB，`0` 表示不限制）。超过 LZ4 `int` 上限的压缩 metadata 始终被拒绝，空 data block 也是非法的。
 
 ### 版本编码与兼容性
 

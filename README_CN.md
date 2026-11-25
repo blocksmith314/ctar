@@ -98,6 +98,10 @@ ctar dump pack_file.ctar
 `--max-decompressed-size SIZE` 调整（`0` 表示不限制）。超过预算的文件会被拒绝，
 在分块支持（#38）落地前需要显式调大预算。
 
+归档读取命令（`unpack`、`tree`、`ls`、`dump`、`stat`）还会把未压缩 metadata 限制为
+1 GiB；可用 `--max-metadata-size SIZE` 调整（`0` 表示不限制）。这样小的恶意归档
+无法膨胀成数 GiB 的 metadata 缓冲区。
+
 一般情况下，使用 `pack` 和 `unpack` 命令即可满足大部分的需求，文件越多收益越明显。如果有其他需求，如将打包后的文件放在云端，但只想获取打包文件中的部分数据时，可参考下面的简短教程。
 
 ## 简短教程
