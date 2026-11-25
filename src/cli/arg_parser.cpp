@@ -85,9 +85,9 @@ COMMAND OPTIONS
             Files above it are rejected during unpack.
 
         --max-metadata-size SIZE
-            Per-archive metadata limit for unpack/tree/ls/dump/stat
-            (default 1G, 0 = unlimited). Larger metadata is rejected before
-            it is allocated.
+            Per-archive limit on stored and uncompressed metadata for
+            unpack/tree/ls/dump/stat (default 1G, 0 = unlimited). Larger
+            metadata is rejected before it is allocated.
 
     ls:
         -h

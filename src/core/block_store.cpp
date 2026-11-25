@@ -1136,17 +1136,44 @@ namespace ctar
                     "(use --max-metadata-size to raise it)",
                     pack_file_path, header.metadata_original_size, max_metadata_size_);
             }
-            // LZ4 takes int sizes, so larger compressed metadata cannot be decoded.
-            if (header.metadata_compressed_type != static_cast<uint64_t>(CompressionType::kNone) &&
-                header.metadata_original_size > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+            const bool compressed_metadata =
+                header.metadata_compressed_type != static_cast<uint64_t>(CompressionType::kNone);
+            if (compressed_metadata)
             {
-                return error_corruption("corrupt archive '{}': compressed metadata size {} exceeds the LZ4 limit",
-                                        pack_file_path, header.metadata_original_size);
-            }
-            if (header.metadata_compressed_type != static_cast<uint64_t>(CompressionType::kNone) &&
-                header.metadata_original_size / header.metadata_compressed_size > 255)
-            {
-                return error_corruption("corrupt archive '{}': impossible metadata compression ratio", pack_file_path);
+                // The stored buffer is allocated before decompression too, so it needs
+                // the same budget and the same LZ4 int bound as the output.
+                if (max_metadata_size_ > 0 && header.metadata_compressed_size > max_metadata_size_)
+                {
+                    return error_corruption(
+                        "archive '{}': stored metadata size {} exceeds the configured limit {} "
+                        "(use --max-metadata-size to raise it)",
+                        pack_file_path, header.metadata_compressed_size, max_metadata_size_);
+                }
+                if (header.metadata_original_size > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+                {
+                    return error_corruption(
+                        "corrupt archive '{}': uncompressed metadata size {} exceeds the LZ4 limit", pack_file_path,
+                        header.metadata_original_size);
+                }
+                if (header.metadata_compressed_size > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+                {
+                    return error_corruption(
+                        "corrupt archive '{}': compressed metadata size {} exceeds the LZ4 limit", pack_file_path,
+                        header.metadata_compressed_size);
+                }
+                // Pack stores compressed metadata only when it is strictly smaller;
+                // equal or larger sizes are the raw/kNone fallback.
+                if (header.metadata_compressed_size >= header.metadata_original_size)
+                {
+                    return error_corruption(
+                        "corrupt archive '{}': compressed metadata is not smaller than its original size",
+                        pack_file_path);
+                }
+                if (header.metadata_original_size / header.metadata_compressed_size > 255)
+                {
+                    return error_corruption("corrupt archive '{}': impossible metadata compression ratio",
+                                            pack_file_path);
+                }
             }
             if (!IsValidCompressionType(header.file_data_compressed_type) ||
                 !IsValidCompressionType(header.metadata_compressed_type))
