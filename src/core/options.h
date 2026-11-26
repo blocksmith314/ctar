@@ -51,10 +51,10 @@ namespace ctar
     // --max-metadata-size (0 disables the limit).
     constexpr uint64_t kDefaultMaxMetadataSize = 1ULL * unit::GiB;
 
-    // Maximum directory depth accepted by archive readers. Both graph validation and
-    // the recursive renderer reject deeper trees so a hostile chain cannot overflow
-    // the render stack; 128 still leaves headroom under ASan stack frames, and real
-    // filesystem paths are far shallower.
+    // Maximum depth accepted by the recursive renderer (tree/ls/dump). This is a
+    // rendering limit, not an archive invariant: unpack and stat accept deeper valid
+    // trees, while the renderer returns kCorruption instead of overflowing its stack.
+    // 128 still leaves headroom under ASan stack frames.
     constexpr size_t kMaxDirectoryDepth = 128;
 
     // Thread-local read/block buffers larger than this are trimmed back to this

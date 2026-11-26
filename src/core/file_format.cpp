@@ -536,21 +536,18 @@ namespace
         }
 
         // Breadth-first traversal from the root detects cycles reachable from it and
-        // directories that are only part of a disconnected cycle. The depth bound
-        // keeps the recursive renderer's stack safe for an otherwise valid chain.
+        // directories that are only part of a disconnected cycle. The depth limit is
+        // a renderer concern, not an archive invariant: unpack and stat must accept
+        // deeper valid trees, while the recursive renderer rejects them.
         std::unordered_set<entry_id_t> visited;
         visited.reserve(meta.dir_entry_records.size());
-        std::vector<std::pair<entry_id_t, size_t>> queue;
+        std::vector<entry_id_t> queue;
         queue.reserve(meta.dir_entry_records.size());
-        queue.emplace_back(kRootDirId, 0);
+        queue.push_back(kRootDirId);
         visited.insert(kRootDirId);
         for (size_t head = 0; head < queue.size(); ++head)
         {
-            const auto [dir_id, depth] = queue[head];
-            if (depth > kMaxDirectoryDepth)
-            {
-                return error_corruption("directory graph: depth exceeds the limit {}", kMaxDirectoryDepth);
-            }
+            const entry_id_t dir_id = queue[head];
             const auto children = meta.dir_id_to_child_dir_ids.find(dir_id);
             if (children == meta.dir_id_to_child_dir_ids.end())
             {
@@ -562,7 +559,7 @@ namespace
                 {
                     return error_corruption("directory graph: cycle detected at directory {}", child_id);
                 }
-                queue.emplace_back(child_id, depth + 1);
+                queue.push_back(child_id);
             }
         }
         if (visited.size() != meta.dir_entry_records.size())

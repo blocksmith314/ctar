@@ -1054,7 +1054,7 @@ namespace ctar
         EXPECT_NE(status.error().err_message.find("more than one parent"), std::string::npos);
     }
 
-    TEST(DirectoryGraph, RejectsDepthAboveLimit)
+    TEST(DirectoryGraph, AcceptsDeepChain)
     {
         PackFileMeta meta;
         const size_t dir_count = kMaxDirectoryDepth + 2;
@@ -1066,9 +1066,7 @@ namespace ctar
         {
             meta.dir_id_to_child_dir_ids.put(static_cast<entry_id_t>(id), {static_cast<entry_id_t>(id + 1)});
         }
-        const Status status = ValidateDirectoryGraph(meta);
-        ASSERT_FALSE(status);
-        EXPECT_NE(status.error().err_message.find("depth"), std::string::npos);
+        EXPECT_TRUE(ValidateDirectoryGraph(meta));
     }
 
     TEST(DirectoryGraph, RendererRejectsDepth)

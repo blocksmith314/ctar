@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iterator>
 #include <random>
+#include <sstream>
 #include <gtest/gtest.h>
 #include <ranges>
 #include <string>
@@ -994,6 +995,43 @@ namespace ctar
         EXPECT_NE(status.error().err_message.find("directory graph"), std::string::npos)
             << status.error().message();
         fixture.Cleanup();
+    }
+
+    TEST(DirectoryGraph, DeepTreeUnpacksButDoesNotRender)
+    {
+        const fs::path root{"deep_directory_graph_test"};
+        const fs::path source = root / "source";
+        const fs::path archive = root / "deep.ctar";
+        const fs::path out = root / "out";
+        fs::remove_all(root);
+        fs::create_directories(source);
+        fs::path deep = source;
+        for (size_t i = 0; i < kMaxDirectoryDepth + 2; ++i)
+        {
+            deep /= "d";
+            fs::create_directory(deep);
+        }
+        std::ofstream(deep / "f.txt") << "x";
+
+        BlockStore packer;
+        ASSERT_TRUE(packer.Scan(source.string()));
+        ASSERT_TRUE(packer.PackPipeline(archive.string()));
+
+        // Depth is not an archive invariant: unpack must restore the valid tree.
+        BlockStore unpacker;
+        ASSERT_TRUE(unpacker.UnPackPipeline(archive.string(), out.string(), true));
+        EXPECT_TRUE(fs::exists(out / source / fs::relative(deep, source) / "f.txt"));
+
+        // The recursive renderer rejects the deep tree instead of overflowing.
+        BlockStore reader;
+        ASSERT_TRUE(reader.RestoreBlocksFromPack(archive.string()));
+        std::ostringstream rendered;
+        const Status status = reader.RenderDirectoryTree(rendered);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("depth"), std::string::npos);
+
+        fs::remove_all(root);
     }
 
     namespace
