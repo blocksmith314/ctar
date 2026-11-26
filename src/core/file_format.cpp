@@ -8,6 +8,8 @@
 #include <sys/stat.h>
 #include <system_error>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "file_format.h"
 #include "src/utils/coding.h"
@@ -478,6 +480,95 @@ namespace
                 return error_corruption("{}: unknown compression type {}", entry_label(i),
                                         static_cast<uint32_t>(block_meta.file_compressed_types[i]));
             }
+        }
+        return {};
+    }
+
+    Status ValidateDirectoryGraph(const PackFileMeta& meta)
+    {
+        // Directory entries are identified by their presence in dir_entry_records;
+        // entry_type is not reliable for directories in existing archives (the
+        // scanner re-adds each directory with a default EntryMeta), so the graph
+        // structure is validated by id membership only.
+        if (meta.dir_entry_records.find(kRootDirId) == meta.dir_entry_records.end())
+        {
+            return error_corruption("directory graph: root directory {} has no entry", kRootDirId);
+        }
+
+        // Every non-root directory must have exactly one parent; duplicate edges and
+        // multiple parents are rejected here, before any traversal can loop.
+        std::unordered_map<entry_id_t, entry_id_t> parent_of;
+        parent_of.reserve(meta.dir_entry_records.size());
+        for (const auto& children_entry : meta.dir_id_to_child_dir_ids)
+        {
+            const entry_id_t parent_id = children_entry.first;
+            if (meta.dir_entry_records.find(parent_id) == meta.dir_entry_records.end())
+            {
+                return error_corruption("directory graph: parent {} has no directory entry", parent_id);
+            }
+            for (const entry_id_t child_id : children_entry.second)
+            {
+                if (child_id == parent_id)
+                {
+                    return error_corruption("directory graph: directory {} lists itself as a child", parent_id);
+                }
+                if (child_id == kRootDirId)
+                {
+                    return error_corruption("directory graph: root directory {} appears as a child", kRootDirId);
+                }
+                if (meta.dir_entry_records.find(child_id) == meta.dir_entry_records.end())
+                {
+                    return error_corruption("directory graph: child {} of directory {} has no entry", child_id,
+                                            parent_id);
+                }
+                if (!parent_of.emplace(child_id, parent_id).second)
+                {
+                    return error_corruption("directory graph: directory {} has more than one parent", child_id);
+                }
+            }
+        }
+        for (const auto& dir_entry : meta.dir_entry_records)
+        {
+            if (dir_entry.first != kRootDirId && parent_of.find(dir_entry.first) == parent_of.end())
+            {
+                return error_corruption("directory graph: directory {} has no parent", dir_entry.first);
+            }
+        }
+
+        // Breadth-first traversal from the root detects cycles reachable from it and
+        // directories that are only part of a disconnected cycle. The depth bound
+        // keeps the recursive renderer's stack safe for an otherwise valid chain.
+        std::unordered_set<entry_id_t> visited;
+        visited.reserve(meta.dir_entry_records.size());
+        std::vector<std::pair<entry_id_t, size_t>> queue;
+        queue.reserve(meta.dir_entry_records.size());
+        queue.emplace_back(kRootDirId, 0);
+        visited.insert(kRootDirId);
+        for (size_t head = 0; head < queue.size(); ++head)
+        {
+            const auto [dir_id, depth] = queue[head];
+            if (depth > kMaxDirectoryDepth)
+            {
+                return error_corruption("directory graph: depth exceeds the limit {}", kMaxDirectoryDepth);
+            }
+            const auto children = meta.dir_id_to_child_dir_ids.find(dir_id);
+            if (children == meta.dir_id_to_child_dir_ids.end())
+            {
+                continue;
+            }
+            for (const entry_id_t child_id : children->second)
+            {
+                if (!visited.insert(child_id).second)
+                {
+                    return error_corruption("directory graph: cycle detected at directory {}", child_id);
+                }
+                queue.emplace_back(child_id, depth + 1);
+            }
+        }
+        if (visited.size() != meta.dir_entry_records.size())
+        {
+            return error_corruption("directory graph: {} directories are unreachable from root",
+                                    meta.dir_entry_records.size() - visited.size());
         }
         return {};
     }
@@ -1168,9 +1259,37 @@ namespace
     }
 
 
+    Status PackFileHandle::ValidateDirectoryGraph() const
+    {
+        return ctar::ValidateDirectoryGraph(pack_file_meta_);
+    }
+
     Status PackFileHandle::RenderDirListing(std::ostream& out, entry_id_t dir_id, const std::string& prefix,
                                             const OutputMode output_mode, bool human_readable, bool has_header) const
     {
+        std::unordered_set<entry_id_t> active;
+        return RenderDirListingImpl(out, dir_id, prefix, output_mode, human_readable, has_header, active, 0);
+    }
+
+    Status PackFileHandle::RenderDirListingImpl(std::ostream& out, entry_id_t dir_id, const std::string& prefix,
+                                                const OutputMode output_mode, bool human_readable, bool has_header,
+                                                std::unordered_set<entry_id_t>& active, const size_t depth) const
+    {
+        if (depth > kMaxDirectoryDepth)
+        {
+            return error_corruption("directory tree depth exceeds the limit {}", kMaxDirectoryDepth);
+        }
+        if (!active.insert(dir_id).second)
+        {
+            return error_corruption("directory cycle detected at directory {}", dir_id);
+        }
+        struct ActiveDirectoryGuard
+        {
+            std::unordered_set<entry_id_t>& active;
+            entry_id_t dir_id;
+            ~ActiveDirectoryGuard() { active.erase(dir_id); }
+        } active_guard{active, dir_id};
+
         auto dir_name_res = GetDirPathByDirId(dir_id);
         if (!dir_name_res)
         {
@@ -1234,8 +1353,8 @@ namespace
                 if (entry.is_directory)
                 {
                     std::string new_prefix = prefix + (is_last ? "    " : "│   ");
-                    auto status =
-                        RenderDirListing(out, entry.id, new_prefix, OutputMode::TREE, human_readable, has_header);
+                    auto status = RenderDirListingImpl(out, entry.id, new_prefix, OutputMode::TREE, human_readable,
+                                                       has_header, active, depth + 1);
                     if (!status)
                         return status;
                 }
@@ -1277,7 +1396,8 @@ namespace
                 }
                 else
                 {
-                    auto status = RenderDirListing(out, entry.id, prefix, output_mode, human_readable, has_header);
+                    auto status = RenderDirListingImpl(out, entry.id, prefix, output_mode, human_readable, has_header,
+                                                       active, depth + 1);
                     if (!status)
                         return status;
                 }

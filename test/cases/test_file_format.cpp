@@ -1,4 +1,5 @@
 #include <fstream>
+#include <sstream>
 #include <string_view>
 #include <grp.h>
 #include <gtest/gtest.h>
@@ -924,6 +925,181 @@ namespace ctar
         EXPECT_EQ(ptr, buf.data() + buf.size());
     }
 
+
+    namespace
+    {
+        void AddDirEntry(PackFileMeta& meta, const entry_id_t id)
+        {
+            meta.dir_entry_records.put(id, EntryRecord{});
+        }
+    } // namespace
+
+    TEST(DirectoryGraph, AcceptsRootOnly)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, kRootDirId);
+        EXPECT_TRUE(ValidateDirectoryGraph(meta));
+    }
+
+    TEST(DirectoryGraph, AcceptsValidTree)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        AddDirEntry(meta, 2);
+        AddDirEntry(meta, 3);
+        meta.dir_id_to_child_dir_ids.put(1, {2});
+        meta.dir_id_to_child_dir_ids.put(2, {3});
+        EXPECT_TRUE(ValidateDirectoryGraph(meta));
+    }
+
+    TEST(DirectoryGraph, RejectsMissingRoot)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 2);
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("root"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsSelfCycle)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        meta.dir_id_to_child_dir_ids.put(1, {1});
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("lists itself"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsRootAsChild)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        AddDirEntry(meta, 2);
+        meta.dir_id_to_child_dir_ids.put(1, {2});
+        meta.dir_id_to_child_dir_ids.put(2, {1});
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("root directory"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsMultipleParents)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        AddDirEntry(meta, 2);
+        AddDirEntry(meta, 3);
+        meta.dir_id_to_child_dir_ids.put(1, {2});
+        meta.dir_id_to_child_dir_ids.put(3, {2});
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("more than one parent"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsDisconnectedCycle)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        AddDirEntry(meta, 2);
+        AddDirEntry(meta, 3);
+        AddDirEntry(meta, 4);
+        meta.dir_id_to_child_dir_ids.put(1, {3});
+        meta.dir_id_to_child_dir_ids.put(2, {4});
+        meta.dir_id_to_child_dir_ids.put(4, {2});
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("unreachable"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsUnknownChild)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        meta.dir_id_to_child_dir_ids.put(1, {2});
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("child 2"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsUnknownParent)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        AddDirEntry(meta, 2);
+        meta.dir_id_to_child_dir_ids.put(3, {2});
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("parent 3"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsMissingParent)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        AddDirEntry(meta, 2);
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("directory 2 has no parent"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsDuplicateChild)
+    {
+        PackFileMeta meta;
+        AddDirEntry(meta, 1);
+        AddDirEntry(meta, 2);
+        meta.dir_id_to_child_dir_ids.put(1, {2, 2});
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("more than one parent"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RejectsDepthAboveLimit)
+    {
+        PackFileMeta meta;
+        const size_t dir_count = kMaxDirectoryDepth + 2;
+        for (size_t id = 1; id <= dir_count; ++id)
+        {
+            AddDirEntry(meta, static_cast<entry_id_t>(id));
+        }
+        for (size_t id = 1; id < dir_count; ++id)
+        {
+            meta.dir_id_to_child_dir_ids.put(static_cast<entry_id_t>(id), {static_cast<entry_id_t>(id + 1)});
+        }
+        const Status status = ValidateDirectoryGraph(meta);
+        ASSERT_FALSE(status);
+        EXPECT_NE(status.error().err_message.find("depth"), std::string::npos);
+    }
+
+    TEST(DirectoryGraph, RendererRejectsCycle)
+    {
+        PackFileMeta meta;
+        meta.dir_name_data = "rootchild";
+        EntryRecord root{};
+        root.name_handle.offset = 0;
+        root.name_handle.len = 4;
+        root.entry_meta.entry_type = EntryType::DIRECTORY;
+        EntryRecord child{};
+        child.name_handle.offset = 4;
+        child.name_handle.len = 5;
+        child.entry_meta.entry_type = EntryType::DIRECTORY;
+        meta.dir_entry_records.put(1, root);
+        meta.dir_entry_records.put(2, child);
+        meta.dir_id_to_child_dir_ids.put(1, {2});
+        meta.dir_id_to_child_dir_ids.put(2, {1});
+
+        std::string bytes;
+        meta.Serialize(&bytes);
+        PackFileHandle handle;
+        const char* ptr = bytes.data();
+        ASSERT_TRUE(handle.DeserializePackFileMeta(ptr, bytes.data() + bytes.size()));
+
+        std::ostringstream out;
+        const Status status = handle.RenderDirListing(out);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("cycle"), std::string::npos);
+    }
 
 } // namespace ctar
 

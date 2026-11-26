@@ -51,6 +51,11 @@ namespace ctar
     // --max-metadata-size (0 disables the limit).
     constexpr uint64_t kDefaultMaxMetadataSize = 1ULL * unit::GiB;
 
+    // Maximum directory depth accepted by archive readers. Both graph validation and
+    // the recursive renderer reject deeper trees so a hostile chain cannot overflow
+    // the render stack. Real filesystem paths are far shallower than this.
+    constexpr size_t kMaxDirectoryDepth = 1024;
+
     // Thread-local read/block buffers larger than this are trimmed back to this
     // size after a task, instead of being held until the process exits.
     constexpr size_t kMaxRetainedBufferBytes = 128UL * unit::MiB;

@@ -1300,6 +1300,10 @@ namespace ctar
         {
             return s;
         }
+        if (auto graph_status = pack_file_handle_.ValidateDirectoryGraph(); !graph_status)
+        {
+            return error_corruption("corrupt archive '{}': {}", pack_file_path, graph_status.error().message());
+        }
         if (static_cast<size_t>(meta_end - meta_ptr) < sizeof(uint64_t))
         {
             return error_corruption("corrupt archive '{}': missing data block count", pack_file_path);
