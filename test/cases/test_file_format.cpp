@@ -1071,6 +1071,37 @@ namespace ctar
         EXPECT_NE(status.error().err_message.find("depth"), std::string::npos);
     }
 
+    TEST(DirectoryGraph, RendererRejectsDepth)
+    {
+        PackFileMeta meta;
+        meta.dir_name_data = "d";
+        const size_t dir_count = kMaxDirectoryDepth + 2;
+        for (size_t id = 1; id <= dir_count; ++id)
+        {
+            EntryRecord record{};
+            record.name_handle.offset = 0;
+            record.name_handle.len = 1;
+            record.entry_meta.entry_type = EntryType::DIRECTORY;
+            meta.dir_entry_records.put(static_cast<entry_id_t>(id), record);
+        }
+        for (size_t id = 1; id < dir_count; ++id)
+        {
+            meta.dir_id_to_child_dir_ids.put(static_cast<entry_id_t>(id), {static_cast<entry_id_t>(id + 1)});
+        }
+
+        std::string bytes;
+        meta.Serialize(&bytes);
+        PackFileHandle handle;
+        const char* ptr = bytes.data();
+        ASSERT_TRUE(handle.DeserializePackFileMeta(ptr, bytes.data() + bytes.size()));
+
+        std::ostringstream out;
+        const Status status = handle.RenderDirListing(out);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("depth"), std::string::npos);
+    }
+
     TEST(DirectoryGraph, RendererRejectsCycle)
     {
         PackFileMeta meta;

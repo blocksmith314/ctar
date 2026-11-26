@@ -164,9 +164,9 @@ data_block_meta[data_block_count]
 - 对 `kLZ4`/`kLZ4HC`，`file_orig_sizes` 和 `file_compressed_sizes` 必须落在 LZ4 的 `int` API 范围内，`file_orig_sizes <= 255 * file_compressed_sizes`，且原始大小为 0 时存储大小也必须为 0。
 - 每个 `file_ids[i]` 都必须存在于 `file_entry_records`，其 `block_id`、`file_orig_size`、`file_compressed_size` 和绝对 `file_offset` 与块元数据一致；所有索引文件都必须被且仅被引用一次。
 - 目录路径唯一，同一目录内文件名唯一，保证每个解压文件有唯一的输出路径。
-- 目录索引必须是以 `kRootDirId`（1）为根的树：每个非 root 目录恰好出现一次作为子节点，任何目录都不是自己的祖先，所有目录都能从 root 到达，且深度不超过 1024。空 data block 是非法的。
+- 目录索引必须是以 `kRootDirId`（1）为根的树：每个非 root 目录恰好出现一次作为子节点，任何目录都不是自己的祖先，所有目录都能从 root 到达，且深度不超过 128。空 data block 是非法的。
 - `unpack` 对每个文件施加解压大小预算（`--max-decompressed-size`，默认 1 GiB，`0` 表示不限制）。更大的文件需要调大预算，或等待分块支持（#38）。
-- 所有归档读取命令都对存储和未压缩 metadata 施加每归档预算（`--max-metadata-size`，默认 1 GiB，`0` 表示不限制），并在分配任一缓冲区之前检查。超过 LZ4 `int` 上限的压缩 metadata 始终被拒绝，压缩 metadata 必须严格小于原始大小，空 data block 也是非法的。
+- 所有归档读取命令都对存储和未压缩 metadata 施加每归档预算（`--max-metadata-size`，默认 1 GiB，`0` 表示不限制），并在分配任一缓冲区之前检查。超过 LZ4 `int` 上限的压缩 metadata 始终被拒绝，压缩 metadata 必须严格小于原始大小。
 
 ### 版本编码与兼容性
 

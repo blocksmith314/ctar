@@ -53,8 +53,9 @@ namespace ctar
 
     // Maximum directory depth accepted by archive readers. Both graph validation and
     // the recursive renderer reject deeper trees so a hostile chain cannot overflow
-    // the render stack. Real filesystem paths are far shallower than this.
-    constexpr size_t kMaxDirectoryDepth = 1024;
+    // the render stack; 128 still leaves headroom under ASan stack frames, and real
+    // filesystem paths are far shallower.
+    constexpr size_t kMaxDirectoryDepth = 128;
 
     // Thread-local read/block buffers larger than this are trimmed back to this
     // size after a task, instead of being held until the process exits.
