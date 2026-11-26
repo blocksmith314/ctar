@@ -12,6 +12,7 @@
 #include <string_view>
 #include <sys/stat.h>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "options.h"
 #include "sorted_map.h"
@@ -279,6 +280,11 @@ namespace ctar
         [[nodiscard]] const std::string& GetUserName(uint32_t uid);
         [[nodiscard]] const std::string& GetGroupName(uint32_t gid);
 
+        /// @brief Recursive renderer with cycle/depth guards; see RenderDirListing.
+        Status RenderDirListingImpl(std::ostream& out, entry_id_t dir_id, const std::string& prefix,
+                                    OutputMode output_mode, bool human_readable, bool has_header,
+                                    std::unordered_set<entry_id_t>& active, size_t depth) const;
+
     public:
         /// @brief Scan host filesystem directory, import entries into pack metadata
         /// @param root_path designated host‑system root directory for scanning
@@ -350,6 +356,10 @@ namespace ctar
 
         /// @brief Number of directory entries, including the root directory.
         [[nodiscard]] size_t GetDirectoryCount() const { return pack_file_meta_.dir_entry_records.size(); }
+
+        /// @brief Validate the deserialized directory graph before rendering or unpacking.
+        /// @return Status::Ok when the graph is a tree rooted at kRootDirId; kCorruption otherwise
+        [[nodiscard]] Status ValidateDirectoryGraph() const;
 
         /// @brief Add entry metadata into map, append name string to data buffer
         /// @param key unique entry id
@@ -545,5 +555,15 @@ namespace ctar
     /// @return Ok on success, kCorruption otherwise
     Status ValidateDataBlockMeta(const DataBlockMeta& block_meta, const EntryPathResolver& path_of = {},
                                  uint64_t max_original_size = kDefaultMaxDecompressedFileSize);
+
+    /// @brief Validate the directory graph in a deserialized PackFileMeta.
+    ///
+    /// The child maps are untrusted: they must describe a tree rooted at kRootDirId,
+    /// with exactly one parent for every non-root directory, no cycles or duplicate
+    /// edges, and every directory reachable from the root. Chains deeper than
+    /// kMaxDirectoryDepth are rejected so the recursive renderer cannot overflow.
+    /// @param meta deserialized metadata index
+    /// @return Ok on success, kCorruption otherwise
+    Status ValidateDirectoryGraph(const PackFileMeta& meta);
 }; // namespace ctar
 #endif // CTAR_FORMAT_H

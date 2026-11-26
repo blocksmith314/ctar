@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iterator>
 #include <random>
+#include <sstream>
 #include <gtest/gtest.h>
 #include <ranges>
 #include <string>
@@ -926,6 +927,112 @@ namespace ctar
         fixture.Cleanup();
     }
 
+
+    TEST(MalformedArchive, RejectsCyclicDirectoryGraph)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        std::string bytes = fixture.Bytes();
+
+        constexpr size_t kMetadataOffsetField = 96;
+        constexpr size_t kMetadataSizeField = 112;
+        constexpr size_t kMetadataTypeField = 120;
+        constexpr size_t kMetadataChecksumField = 128;
+        constexpr size_t kEntryRecordSize = 2 * sizeof(uint64_t) + 176;
+
+        const size_t metadata_offset = ReadU64At(bytes, kMetadataOffsetField);
+        const size_t metadata_size = ReadU64At(bytes, kMetadataSizeField);
+        ASSERT_GT(metadata_size, 0U);
+        ASSERT_EQ(ReadU64At(bytes, kMetadataTypeField), static_cast<uint64_t>(CompressionType::kNone));
+
+        size_t pos = metadata_offset;
+        const size_t metadata_end = metadata_offset + metadata_size;
+        const auto read_u64 = [&]()
+        {
+            EXPECT_LE(pos + sizeof(uint64_t), metadata_end);
+            const uint64_t value = ReadU64At(bytes, pos);
+            pos += sizeof(uint64_t);
+            return value;
+        };
+
+        // PackFileMeta: four scalars, two name buffers, then the two entry maps.
+        for (int i = 0; i < 4; ++i)
+        {
+            (void)read_u64();
+        }
+        pos += static_cast<size_t>(read_u64()); // dir_name_data
+        pos += static_cast<size_t>(read_u64()); // file_name_data
+        for (int map = 0; map < 2; ++map)
+        {
+            const uint64_t count = read_u64();
+            pos += static_cast<size_t>(count) * (sizeof(uint64_t) + kEntryRecordSize);
+        }
+
+        // Patch the root's first child into a self-cycle, then make the checksum valid
+        // so the archive reaches the directory-graph validation.
+        const uint64_t map_count = read_u64();
+        bool patched = false;
+        for (uint64_t entry = 0; entry < map_count; ++entry)
+        {
+            const entry_id_t parent = read_u64();
+            const uint64_t child_count = read_u64();
+            if (parent == kRootDirId && child_count > 0)
+            {
+                WriteU64At(bytes, pos, kRootDirId);
+                patched = true;
+                break;
+            }
+            pos += static_cast<size_t>(child_count) * sizeof(uint64_t);
+        }
+        ASSERT_TRUE(patched);
+
+        const std::string metadata = bytes.substr(metadata_offset, metadata_size);
+        WriteU64At(bytes, kMetadataChecksumField, XXH64(metadata.data(), metadata.size(), kHashSeed));
+
+        const Status status = fixture.Unpack(bytes);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("directory graph"), std::string::npos)
+            << status.error().message();
+        fixture.Cleanup();
+    }
+
+    TEST(DirectoryGraph, DeepTreeUnpacksButDoesNotRender)
+    {
+        const fs::path root{"deep_directory_graph_test"};
+        const fs::path source = root / "source";
+        const fs::path archive = root / "deep.ctar";
+        const fs::path out = root / "out";
+        fs::remove_all(root);
+        fs::create_directories(source);
+        fs::path deep = source;
+        for (size_t i = 0; i < kMaxDirectoryDepth + 2; ++i)
+        {
+            deep /= "d";
+            fs::create_directory(deep);
+        }
+        std::ofstream(deep / "f.txt") << "x";
+
+        BlockStore packer;
+        ASSERT_TRUE(packer.Scan(source.string()));
+        ASSERT_TRUE(packer.PackPipeline(archive.string()));
+
+        // Depth is not an archive invariant: unpack must restore the valid tree.
+        BlockStore unpacker;
+        ASSERT_TRUE(unpacker.UnPackPipeline(archive.string(), out.string(), true));
+        EXPECT_TRUE(fs::exists(out / source / fs::relative(deep, source) / "f.txt"));
+
+        // The recursive renderer rejects the deep tree instead of overflowing.
+        BlockStore reader;
+        ASSERT_TRUE(reader.RestoreBlocksFromPack(archive.string()));
+        std::ostringstream rendered;
+        const Status status = reader.RenderDirectoryTree(rendered);
+        ASSERT_FALSE(status);
+        EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+        EXPECT_NE(status.error().err_message.find("depth"), std::string::npos);
+
+        fs::remove_all(root);
+    }
 
     namespace
     {

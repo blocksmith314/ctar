@@ -141,8 +141,8 @@ data_block_meta[data_block_count]
 | 11 | 8 + 8n | `file_offsets` | `u64 count` + `count × u64`, relative to the block payload |
 | 12 | 8 + 8n | `file_hashes` | `u64 count` + `count × u64`, XXH64 of the original bytes |
 
-The raw `u64` arrays are stored as consecutive little-endian values. A data block meta is at least
-12 × 8 = 96 bytes.
+The raw `u64` arrays are stored as consecutive little-endian values. Empty data blocks are invalid; the
+smallest valid block contains one file and is 137 bytes.
 
 ### magic_number
 
@@ -166,8 +166,9 @@ The reader rejects archives that violate these cross-field invariants; a writer 
 - For `kLZ4`/`kLZ4HC`, `file_orig_sizes` and `file_compressed_sizes` fit the LZ4 `int` API, `file_orig_sizes <= 255 * file_compressed_sizes`, and a zero original size requires a zero stored size.
 - Every `file_ids[i]` exists in `file_entry_records`; the entry's `block_id`, `file_orig_size`, `file_compressed_size` and absolute `file_offset` agree with the block, and every indexed file is referenced exactly once.
 - Directory paths are unique, and a directory contains no duplicate file names, so every extracted file has a distinct output path.
+- The directory index must form a tree rooted at `kRootDirId` (1): every non-root directory appears exactly once as a child, no directory is its own ancestor, and every directory is reachable from the root. The rendering commands (`tree`, `ls`, `dump`) additionally reject trees deeper than 128 to bound their recursion; `unpack` and `stat` do not apply that limit.
 - `unpack` enforces a per-file decompressed-size budget (`--max-decompressed-size`, default 1 GiB, `0` disables it). Archives with larger files need a larger budget or chunked files (#38).
-- All archive readers enforce a per-archive metadata budget (`--max-metadata-size`, default 1 GiB, `0` disables it) for both the stored and the uncompressed metadata before allocating either. Compressed metadata above the LZ4 `int` limit is always rejected, compressed metadata must be strictly smaller than its original size, and empty data blocks are invalid.
+- All archive readers enforce a per-archive metadata budget (`--max-metadata-size`, default 1 GiB, `0` disables it) for both the stored and the uncompressed metadata before allocating either. Compressed metadata above the LZ4 `int` limit is always rejected, and compressed metadata must be strictly smaller than its original size.
 
 ### version encoding and compatibility
 
