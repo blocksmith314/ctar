@@ -62,6 +62,11 @@ namespace ctar
     inline constexpr Version kFileFormatVersion{kFileFormatVersionMajor, kFileFormatVersionMinor,
                                                 kFileFormatVersionPatch};
 
+    /// @brief Human-readable tool version, e.g. "1.1.1".
+    /// This is defined in the library (not inline) so a consumer that calls it
+    /// links against libctar and cannot succeed with headers alone.
+    [[nodiscard]] std::string VersionString();
+
 } // namespace ctar
 
 #endif // CTAR_VERSION_H

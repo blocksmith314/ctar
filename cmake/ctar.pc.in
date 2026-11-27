@@ -6,5 +6,6 @@ includedir=@includedir@
 Name: ctar
 Description: Cloud‑era Tar — modern archive library optimized for cloud blob storage
 Version: @PROJECT_VERSION@
-Libs: -L${libdir} -lctar_lib
+Libs: -L${libdir} -lctar
+Libs.private: -pthread
 Cflags: -I${includedir}

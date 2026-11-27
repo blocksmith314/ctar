@@ -342,6 +342,20 @@ cmake --build .
 cmake --install . # --prefix ./user_defined_install_path
 ```
 
+### Using the installed library
+
+```cmake
+find_package(ctar CONFIG REQUIRED)
+target_link_libraries(app PRIVATE ctar::ctar)
+```
+
+```cpp
+#include <ctar/ctar.h>
+```
+
+The installed `libctar.a` bundles LZ4 and xxhash, so no separate compression library is needed. Only the
+headers under `include/ctar/` are public; `src/` and `api/` headers are internal and are not installed.
+
 **Not supported**: Windows, Intel Macs, arm64 Linux, systems with glibc older than 2.28 (such as CentOS 7), and
 musl-based distributions such as Alpine.
 
