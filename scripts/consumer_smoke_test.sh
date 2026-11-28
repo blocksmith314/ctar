@@ -38,6 +38,17 @@ cmake --build "$consumer_build" >/dev/null
 echo "== running the consumer =="
 "$consumer_build/ctar_consumer"
 
+echo "== reading a real archive through the public API =="
+if [[ -x "$build_dir/ctar" ]]; then
+    tree_dir="$tmp_root/consumer-tree"
+    mkdir -p "$tree_dir"
+    printf 'hello\n' >"$tree_dir/hello.txt"
+    "$build_dir/ctar" pack "$tree_dir" "$tmp_root/consumer.ctar" >/dev/null
+    "$consumer_build/ctar_consumer" "$tmp_root/consumer.ctar"
+else
+    echo "ctar CLI not built; skipping the archive read check"
+fi
+
 echo "== checking that no test framework was installed =="
 pollution=$(find "$prefix" \( -name '*gtest*' -o -name '*gmock*' \) -print)
 if [[ -n "$pollution" ]]; then

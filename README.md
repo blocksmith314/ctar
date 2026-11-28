@@ -355,8 +355,32 @@ target_link_libraries(app PRIVATE ctar::ctar)
 
 The installed `libctar.a` bundles LZ4 and xxhash, so no separate compression library is needed. Only the
 headers under `include/ctar/` are public; `src/` and `api/` headers are internal and are not installed. The
-current public API exposes version information; the archive read API is tracked in #101. The bundled
-`LZ4_*`/`XXH*` symbols are part of `libctar.a` and may collide with a consumer's own copies of those libraries.
+bundled `LZ4_*`/`XXH*` symbols are part of `libctar.a` and may collide with a consumer's own copies of those
+libraries.
+
+### Reading an archive from C++
+
+```cpp
+#include <ctar/ctar.h>
+
+auto reader = ctar::ArchiveReader::Open("pack_file.ctar");
+if (!reader)
+{
+    // reader.error().code, reader.error().message
+}
+
+auto entries = reader->List("/", /*recursive=*/true);
+auto info    = reader->Stat("/hello.txt");
+auto data    = reader->ReadFile("/image.jpg");   // std::shared_ptr<const ctar::Buffer>
+auto file    = reader->OpenFile("/data.parquet");
+char         buf[4096];
+file->ReadAt(0, buf);
+```
+
+Reading one file touches only that file's stored bytes; `.parquet`, `.jpeg` and other suffix-listed entries
+are stored raw and are returned without decompression. Compressed files are decompressed and verified
+against the archive's XXH64 before being returned. `ReaderOptions` bounds the metadata size and the
+per-file size (`0` disables the limit). Nothing is extracted to disk.
 
 **Not supported**: Windows, Intel Macs, arm64 Linux, systems with glibc older than 2.28 (such as CentOS 7), and
 musl-based distributions such as Alpine.

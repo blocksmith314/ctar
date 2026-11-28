@@ -82,6 +82,7 @@ endif ()
 
 # ========= Core Library =========
 set(CORE_SOURCES
+        src/core/archive_reader.cpp
         src/core/block_store.cpp
         src/core/file_format.cpp
         src/core/file_handle.cpp
@@ -187,6 +188,7 @@ if (BUILD_TEST)
     include(GoogleTest)
 
     set(TEST_SOURCES
+            test/cases/test_archive_reader.cpp
             test/cases/test_block_store.cpp
             test/cases/test_cli.cpp
             test/cases/test_compress.cpp
@@ -292,10 +294,9 @@ endif()
 
 # Public headers only. Internal headers under src/ and api/ are implementation
 # details and are deliberately not installed.
-install(FILES
-        ${PROJECT_SOURCE_DIR}/include/ctar/ctar.h
-        ${PROJECT_SOURCE_DIR}/include/ctar/version.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ctar
+install(DIRECTORY
+        ${PROJECT_SOURCE_DIR}/include/ctar
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
 install(EXPORT ${PROJECT_NAME}Targets
