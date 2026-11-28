@@ -339,8 +339,31 @@ target_link_libraries(app PRIVATE ctar::ctar)
 ```
 
 安装的 `libctar.a` 已内置 LZ4 和 xxhash，不需要额外安装压缩库。只有 `include/ctar/` 下的头文件是公共的；
-`src/` 和 `api/` 下的头文件属于内部实现，不会安装。当前公共 API 只提供版本信息，归档读取 API 见 #101。
+`src/` 和 `api/` 下的头文件属于内部实现，不会安装。
 内置的 `LZ4_*`/`XXH*` 符号属于 `libctar.a`，可能与使用方自己的同名库冲突。
+
+### 在 C++ 中读取归档
+
+```cpp
+#include <ctar/ctar.h>
+
+auto reader = ctar::ArchiveReader::Open("pack_file.ctar");
+if (!reader)
+{
+    // reader.error().code, reader.error().message
+}
+
+auto entries = reader->List("/", /*recursive=*/true);
+auto info    = reader->Stat("/hello.txt");
+auto data    = reader->ReadFile("/image.jpg");   // std::shared_ptr<const ctar::Buffer>
+auto file    = reader->OpenFile("/data.parquet");
+char         buf[4096];
+file->ReadAt(0, buf);
+```
+
+读取单个文件只访问该文件自身存储的字节；`.parquet`、`.jpeg` 等后缀列表中的文件以原始形式存储，
+返回时无需解压。压缩文件会解压并按归档中的 XXH64 校验后再返回。`ReaderOptions` 可限制 metadata
+大小和单文件大小（`0` 表示不限制）。整个过程不会解压到磁盘。
 
 **暂不支持**：Windows、Intel Mac、arm64 Linux、glibc 低于 2.28 的系统（如 CentOS 7），以及使用 musl 的系统（如 Alpine）。
 

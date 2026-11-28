@@ -338,6 +338,14 @@ namespace ctar
 
         [[nodiscard]] const PackFileHeader& GetPackHeader() const noexcept { return pack_file_header_; }
 
+        // Read-only access to the validated index. Internal: these are used by
+        // the public ArchiveReader and are not part of the installed headers.
+        [[nodiscard]] const PackFileHandle& GetPackFileHandle() const noexcept { return pack_file_handle_; }
+        [[nodiscard]] const std::vector<DataBlockMeta>& GetDataBlockMetas() const noexcept
+        {
+            return data_block_metas_;
+        }
+
         /// @brief Read and validate only the archive header; no metadata is parsed.
         [[nodiscard]] Status ReadPackHeaderOnly(const std::string& pack_file_path);
     };
