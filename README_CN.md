@@ -327,6 +327,21 @@ cmake --build .
 cmake --install . # --prefix ./user_defined_install_path
 ```
 
+### 在 CMake 项目中使用安装的库
+
+```cmake
+find_package(ctar CONFIG REQUIRED)
+target_link_libraries(app PRIVATE ctar::ctar)
+```
+
+```cpp
+#include <ctar/ctar.h>
+```
+
+安装的 `libctar.a` 已内置 LZ4 和 xxhash，不需要额外安装压缩库。只有 `include/ctar/` 下的头文件是公共的；
+`src/` 和 `api/` 下的头文件属于内部实现，不会安装。当前公共 API 只提供版本信息，归档读取 API 见 #101。
+内置的 `LZ4_*`/`XXH*` 符号属于 `libctar.a`，可能与使用方自己的同名库冲突。
+
 **暂不支持**：Windows、Intel Mac、arm64 Linux、glibc 低于 2.28 的系统（如 CentOS 7），以及使用 musl 的系统（如 Alpine）。
 
 ### Sanitizer 构建

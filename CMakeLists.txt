@@ -9,6 +9,9 @@ project(ctar VERSION ${CTAR_VERSION} LANGUAGES C CXX)
 
 message(STATUS "${PROJECT_NAME} ${CTAR_VERSION} (file format ${CTAR_FORMAT_VERSION})")
 
+# Must come before any target that records an INSTALL_INTERFACE: the install
+# include directory has to be defined when the interface is evaluated.
+include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,14 +47,18 @@ else ()
     set(lz4_SOURCE_DIR "${LZ4_LOCAL_DIR}")
 endif ()
 
-add_library(lz4 STATIC
+# Object library, not a separate static archive: its objects are merged into
+# libctar.a so the installed library is self-contained and consumers do not need
+# lz4 installed. lz4frame.c is not built because the project never uses the
+# frame API (no LZ4F_* references); leaving it out keeps the bundled symbol set
+# smaller.
+add_library(lz4 OBJECT
         ${lz4_SOURCE_DIR}/lib/lz4.c
         ${lz4_SOURCE_DIR}/lib/lz4hc.c
-        ${lz4_SOURCE_DIR}/lib/lz4frame.c
         ${lz4_SOURCE_DIR}/lib/xxhash.c
 )
 target_include_directories(lz4 PUBLIC ${lz4_SOURCE_DIR}/lib)
-add_library(lz4::lz4 ALIAS lz4)
+set_target_properties(lz4 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Warning flags as variable, no INTERFACE target
 if (MSVC)
@@ -78,24 +85,31 @@ set(CORE_SOURCES
         src/core/block_store.cpp
         src/core/file_format.cpp
         src/core/file_handle.cpp
+        src/core/version.cpp
         src/utils/coding.cpp
         src/thread_pool/thread_pool.cpp
 )
 
-add_library(${PROJECT_NAME}_lib STATIC ${CORE_SOURCES})
+add_library(${PROJECT_NAME}_lib STATIC ${CORE_SOURCES} $<TARGET_OBJECTS:lz4>)
 target_compile_options(${PROJECT_NAME}_lib PRIVATE ${PROJECT_WARNING_FLAGS})
+target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_23)
 target_include_directories(${PROJECT_NAME}_lib PUBLIC
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/api>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 
-target_link_libraries(${PROJECT_NAME}_lib PRIVATE $<BUILD_INTERFACE:lz4::lz4> Threads::Threads)
+target_link_libraries(${PROJECT_NAME}_lib PRIVATE Threads::Threads)
 # Threads::Threads is intentionally NOT wrapped in $<BUILD_INTERFACE:...>: because
 # ctar_lib is a static library, consumers have to link pthread as well.
-set_target_properties(${PROJECT_NAME}_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# LZ4 objects are part of this target, so there is no lz4 link dependency.
+set_target_properties(${PROJECT_NAME}_lib PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        OUTPUT_NAME ${PROJECT_NAME}
+        EXPORT_NAME ${PROJECT_NAME})
 
 # ========= CLI =========
 if (BUILD_CLI)
@@ -149,6 +163,10 @@ if (BUILD_TEST)
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(test_warning_fix INTERFACE "-Wno-maybe-uninitialized")
     endif ()
+
+    # Googletest adds install rules (headers, libraries, .pc files) by default.
+    # Keep them out of the ctar install prefix; the tests only need the targets.
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 
     set(GTEST_SOURCE_DIR "${PROJECT_SOURCE_DIR}/third_party/googletest")
     if (EXISTS "${GTEST_SOURCE_DIR}/CMakeLists.txt")
@@ -256,9 +274,9 @@ if (BUILD_BENCHMARKS)
 endif ()
 
 # ========= Install & CMake package export =========
-include(GNUInstallDirs)
 
-# Install library targets
+# Install library targets. ctar_cli_lib is an internal implementation detail of
+# the CLI executable, so it is installed but not exported.
 install(TARGETS ${PROJECT_NAME}_lib
         EXPORT ${PROJECT_NAME}Targets
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -267,31 +285,17 @@ install(TARGETS ${PROJECT_NAME}_lib
 )
 
 if (BUILD_CLI)
-    install(TARGETS ${PROJECT_NAME}_cli_lib
-            EXPORT ${PROJECT_NAME}Targets
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    )
     install(TARGETS ${PROJECT_NAME}
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
 
-# Install api public headers
+# Public headers only. Internal headers under src/ and api/ are implementation
+# details and are deliberately not installed.
 install(FILES
-        ${PROJECT_SOURCE_DIR}/api/ctar.h
-        ${PROJECT_SOURCE_DIR}/api/export.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-)
-
-# Install dependent src headers, preserve src/core / src/utils folder structure
-install(DIRECTORY
-        ${PROJECT_SOURCE_DIR}/src/core
-        ${PROJECT_SOURCE_DIR}/src/utils
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/src
-        FILES_MATCHING
-        PATTERN "block_store.h"
-        PATTERN "status.h"
+        ${PROJECT_SOURCE_DIR}/include/ctar/ctar.h
+        ${PROJECT_SOURCE_DIR}/include/ctar/version.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ctar
 )
 
 install(EXPORT ${PROJECT_NAME}Targets
@@ -327,7 +331,12 @@ install(FILES
 )
 
 # ========= pkg-config .pc file =========
-set(prefix "${CMAKE_INSTALL_PREFIX}")
+# Relocatable prefix: derive it from the .pc file location so
+# `cmake --install <build> --prefix <dir>` still points at the real prefix.
+file(RELATIVE_PATH CTAR_PC_PREFIX_REL
+        "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pkgconfig"
+        "${CMAKE_INSTALL_PREFIX}")
+set(prefix "\${pcfiledir}/${CTAR_PC_PREFIX_REL}")
 set(exec_prefix "\${prefix}")
 set(libdir "\${exec_prefix}/${CMAKE_INSTALL_LIBDIR}")
 set(includedir "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")

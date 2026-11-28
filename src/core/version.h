@@ -1,67 +1,9 @@
-#ifndef CTAR_VERSION_H
-#define CTAR_VERSION_H
+#ifndef CTAR_VERSION_INTERNAL_H
+#define CTAR_VERSION_INTERNAL_H
 
-#include <cstdint>
-#include <format>
-#include <string>
+// The version constants live in the public header, which is the single source
+// of truth parsed by cmake/utils.cmake. This forwarding header keeps the
+// existing internal includes working without a second definition.
+#include <ctar/version.h>
 
-namespace ctar
-{
-
-    struct Version
-    {
-        uint8_t major{};
-        uint8_t minor{};
-        uint8_t patch{};
-        uint8_t reserved{};
-
-        constexpr Version() noexcept = default;
-
-        constexpr Version(uint8_t maj, uint8_t min, uint8_t pat) noexcept : major(maj), minor(min), patch(pat) {}
-
-        [[nodiscard]] constexpr uint32_t Encode() const noexcept
-        {
-            return static_cast<uint32_t>(major) | (static_cast<uint32_t>(minor) << 8U) |
-                (static_cast<uint32_t>(patch) << 16U) | (static_cast<uint32_t>(reserved) << 24U);
-        }
-
-        [[nodiscard]] static constexpr Version Decode(const uint32_t ver) noexcept
-        {
-            Version v;
-            v.major = static_cast<uint8_t>(ver & 0xFFU);
-            v.minor = static_cast<uint8_t>((ver >> 8U) & 0xFFU);
-            v.patch = static_cast<uint8_t>((ver >> 16U) & 0xFFU);
-            v.reserved = static_cast<uint8_t>((ver >> 24U) & 0xFFU);
-            return v;
-        }
-
-        [[nodiscard]] std::string to_string() const { return std::format("{}.{}.{}", major, minor, patch); }
-    };
-
-
-    // Tool version -- the single source of truth for the release number.
-    // cmake/version.cmake extracts these three scalars textually and feeds them
-    // into project(VERSION ...), so the CLI, ctar.pc and ctarConfigVersion.cmake
-    // all agree.
-    constexpr uint8_t kToolVersionMajor = 1;
-    constexpr uint8_t kToolVersionMinor = 1;
-    constexpr uint8_t kToolVersionPatch = 1;
-
-    // On-disk archive format version, stamped into every archive header.
-    // Bump this ONLY when the byte layout changes -- never to match the tool
-    // version above.
-    constexpr uint8_t kFileFormatVersionMajor = 1;
-    constexpr uint8_t kFileFormatVersionMinor = 1;
-    constexpr uint8_t kFileFormatVersionPatch = 0;
-
-
-    // Compile-time conveniences derived from the scalars above. The scalars stay
-    // the authority because they are what CMake parses.
-    inline constexpr Version kToolVersion{kToolVersionMajor, kToolVersionMinor, kToolVersionPatch};
-
-    inline constexpr Version kFileFormatVersion{kFileFormatVersionMajor, kFileFormatVersionMinor,
-                                                kFileFormatVersionPatch};
-
-} // namespace ctar
-
-#endif // CTAR_VERSION_H
+#endif // CTAR_VERSION_INTERNAL_H

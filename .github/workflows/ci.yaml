@@ -113,6 +113,9 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure
 
+      - name: Installed package consumer
+        run: scripts/consumer_smoke_test.sh build
+
       - name: Dump ctest log on failure
         if: failure()
         working-directory: build
@@ -175,4 +178,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Check shell syntax
-        run: bash -n scripts/perf_gate.sh
+        run: bash -n scripts/perf_gate.sh scripts/consumer_smoke_test.sh
