@@ -499,4 +499,16 @@ namespace ctar
         return {std::move(ptr)};
     }
 
+    ResultStatus<std::unique_ptr<WriteFile>> NewPosixWriteFileExclusive(const std::string& file_name)
+    {
+        const int fd = ::open(file_name.c_str(), O_WRONLY | O_CREAT | O_EXCL | kOpenBaseFlags, 0644);
+        if (fd < 0)
+        {
+            return error_io("fail to create file exclusively {}: {}", file_name, strerror(errno));
+        }
+        FdGuard guard(fd);
+        auto ptr = std::make_unique<PosixWriteFile>(file_name, std::move(guard));
+        return {std::move(ptr)};
+    }
+
 } // namespace ctar

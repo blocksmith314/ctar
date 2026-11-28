@@ -24,6 +24,8 @@ namespace ctar
     namespace fs = std::filesystem;
     using entry_id_t = uint64_t;
 
+    class WriteFile;
+
     enum class TaskOperation
     {
         Pack,
@@ -209,7 +211,9 @@ namespace ctar
 
         Status UnPackTask(const DataBlockMeta& block_meta);
 
-        void WriterLoop();
+        /// @param write_file exclusively opened output; owned by the caller and
+        ///        outlives the writer thread. The writer must not reopen by path.
+        void WriterLoop(WriteFile* write_file);
 
         /// @brief acquire BlockBuffer from available_block_buffers_
         std::unique_ptr<BlockBuffer> AcquireBlockBuffer();

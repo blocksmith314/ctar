@@ -63,6 +63,8 @@ namespace ctar
 
     ResultStatus<std::unique_ptr<ReadFile>> NewPosixReadFile(const std::string& file_name);
     ResultStatus<std::unique_ptr<WriteFile>> NewPosixWriteFile(const std::string& file_name, bool truncate = false);
+    /// @brief Create a new file exclusively (O_CREAT | O_EXCL); fails if it exists.
+    ResultStatus<std::unique_ptr<WriteFile>> NewPosixWriteFileExclusive(const std::string& file_name);
 
     // Bounds for a single read/write syscall. The kernel limits how much one call may
     // carry, and the two platforms react differently when the request is too large:

@@ -102,6 +102,11 @@ ctar ls pack_file.ctar
 ctar dump pack_file.ctar
 ```
 
+`pack` writes to a temporary file in the destination directory and publishes it only after the archive is
+complete and synced, so a failed or interrupted pack never leaves a partial archive under the final name.
+Without `--force` the final step uses a hard link, so an existing archive is never overwritten; on a
+filesystem that cannot create hard links the pack fails and asks for `--force`.
+
 `unpack` limits each file's decompressed size to 1 GiB by default; use
 `--max-decompressed-size SIZE` to change it (`0` disables the limit). Larger files
 are rejected until chunked unpacking (#38) lands.

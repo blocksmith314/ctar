@@ -1123,6 +1123,143 @@ namespace ctar
 
     namespace
     {
+        struct AtomicPackFixture
+        {
+            fs::path root{"atomic_pack_test"};
+            fs::path source{root / "source"};
+            fs::path empty{root / "empty"};
+            fs::path archive{root / "out.ctar"};
+
+            void Create()
+            {
+                fs::remove_all(root);
+                fs::create_directories(source);
+                fs::create_directories(empty);
+                WriteWholeFile((source / "a.txt").string(), "hello");
+
+                BlockStore store;
+                ASSERT_TRUE(store.Scan(source.string()));
+                ASSERT_TRUE(store.PackPipeline(archive.string()));
+            }
+
+            [[nodiscard]] std::vector<std::string> TempFiles() const
+            {
+                std::vector<std::string> temps;
+                for (const auto& entry : fs::directory_iterator(root))
+                {
+                    if (entry.path().filename().string().find(".tmp.") != std::string::npos)
+                    {
+                        temps.push_back(entry.path().string());
+                    }
+                }
+                return temps;
+            }
+
+            void Cleanup() const { fs::remove_all(root); }
+        };
+    } // namespace
+
+    TEST(AtomicPack, FailingPackKeepsExistingArchive)
+    {
+        AtomicPackFixture fixture;
+        fixture.Create();
+        const std::string before = ReadWholeFile(fixture.archive.string());
+
+        // An empty tree fails before any block is written.
+        BlockStore store;
+        ASSERT_TRUE(store.Scan(fixture.empty.string()));
+        const Status status = store.PackPipeline(fixture.archive.string(), true);
+        ASSERT_FALSE(status);
+
+        EXPECT_EQ(ReadWholeFile(fixture.archive.string()), before);
+        EXPECT_TRUE(fixture.TempFiles().empty());
+
+        fixture.Cleanup();
+    }
+
+    TEST(AtomicPack, MidPackFailureKeepsExistingArchive)
+    {
+        AtomicPackFixture fixture;
+        fixture.Create();
+        const std::string before = ReadWholeFile(fixture.archive.string());
+
+        // Scan records the file, then it disappears before the pack task reads it.
+        BlockStore store;
+        ASSERT_TRUE(store.Scan(fixture.source.string()));
+        fs::remove(fixture.source / "a.txt");
+        const Status status = store.PackPipeline(fixture.archive.string(), true);
+        ASSERT_FALSE(status);
+
+        EXPECT_EQ(ReadWholeFile(fixture.archive.string()), before);
+        EXPECT_TRUE(fixture.TempFiles().empty());
+
+        fixture.Cleanup();
+    }
+
+    TEST(AtomicPack, NoForceDoesNotReplaceExistingArchive)
+    {
+        AtomicPackFixture fixture;
+        fixture.Create();
+        const std::string before = ReadWholeFile(fixture.archive.string());
+
+        BlockStore store;
+        ASSERT_TRUE(store.Scan(fixture.source.string()));
+        const Status status = store.PackPipeline(fixture.archive.string(), false);
+        ASSERT_FALSE(status);
+
+        EXPECT_EQ(ReadWholeFile(fixture.archive.string()), before);
+        EXPECT_TRUE(fixture.TempFiles().empty());
+
+        fixture.Cleanup();
+    }
+
+    TEST(AtomicPack, SuccessfulPackReplacesExistingArchive)
+    {
+        AtomicPackFixture fixture;
+        fixture.Create();
+        WriteWholeFile((fixture.source / "a.txt").string(), "replaced");
+
+        BlockStore store;
+        ASSERT_TRUE(store.Scan(fixture.source.string()));
+        ASSERT_TRUE(store.PackPipeline(fixture.archive.string(), true));
+
+        auto reader = ArchiveReader::Open(fixture.archive.string());
+        ASSERT_TRUE(reader) << reader.error().message;
+        auto data = reader->ReadFile("/a.txt");
+        ASSERT_TRUE(data);
+        EXPECT_EQ(data.value()->view(), "replaced");
+        EXPECT_TRUE(fixture.TempFiles().empty());
+
+        fixture.Cleanup();
+    }
+
+    TEST(AtomicPack, BrokenSymlinkRequiresForce)
+    {
+        AtomicPackFixture fixture;
+        fixture.Create();
+        fs::remove(fixture.archive);
+        fs::create_symlink(fixture.root / "missing-target", fixture.archive);
+
+        BlockStore store;
+        ASSERT_TRUE(store.Scan(fixture.source.string()));
+        const Status status = store.PackPipeline(fixture.archive.string(), false);
+        ASSERT_FALSE(status);
+        EXPECT_TRUE(fs::is_symlink(fixture.archive));
+        EXPECT_TRUE(fixture.TempFiles().empty());
+
+        // --force replaces the symlink itself, not the file it pointed at.
+        BlockStore forced;
+        ASSERT_TRUE(forced.Scan(fixture.source.string()));
+        ASSERT_TRUE(forced.PackPipeline(fixture.archive.string(), true));
+        EXPECT_FALSE(fs::is_symlink(fixture.archive));
+        EXPECT_FALSE(fs::exists(fixture.root / "missing-target"));
+        EXPECT_TRUE(fixture.TempFiles().empty());
+
+        fixture.Cleanup();
+    }
+
+    namespace
+    {
         struct UnpackPolicyFixture
         {
             fs::path root{"unpack_policy_test"};

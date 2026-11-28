@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <expected>
+#include <fcntl.h>
 #include <fstream>
 #include <grp.h>
 #include <iostream>
@@ -252,16 +254,14 @@ namespace ctar
         return true;
     }
 
-    void BlockStore::WriterLoop()
+    void BlockStore::WriterLoop(WriteFile* write_file)
     {
-        auto w_res = NewPosixWriteFile(packed_file_);
-        if (!w_res)
+        if (write_file == nullptr)
         {
             std::unique_lock lock(pack_queue_mutex_);
-            writer_error_ = w_res.error();
+            writer_error_ = error_run_time("writer thread has no output file").error();
             return;
         }
-        auto& w_file = w_res.value();
         while (true)
         {
             std::vector<PendingWriteItem> all_write_tasks;
@@ -324,7 +324,7 @@ namespace ctar
                 Status write_status;
                 if (!iovs.empty())
                 {
-                    write_status = w_file->RandomWriteV(iovs.data(), static_cast<int>(iovs.size()),
+                    write_status = write_file->RandomWriteV(iovs.data(), static_cast<int>(iovs.size()),
                                                         file_data_offset_ + batch_start);
                 }
                 if (!write_status)
@@ -686,19 +686,91 @@ namespace ctar
         return {};
     }
 
+    namespace
+    {
+        /// A hidden, unique name in the destination directory. The final rename
+        /// must stay on the same filesystem to be atomic.
+        std::string MakeTempPackPath(const std::string& output_file, const uint64_t sequence)
+        {
+            const fs::path output_path(output_file);
+            const std::string file_name = std::format(".{}.tmp.{}.{}", output_path.filename().string(),
+                                                      static_cast<long>(::getpid()), sequence);
+            if (output_path.has_parent_path())
+            {
+                return (output_path.parent_path() / file_name).string();
+            }
+            return file_name;
+        }
+
+        void RemoveTemporaryArchive(const std::string& path)
+        {
+            std::error_code ec;
+            fs::remove(path, ec);
+            if (ec)
+            {
+                std::println(std::cerr, "warning: failed to remove temporary archive '{}': {}", path, ec.message());
+            }
+        }
+
+        /// Removes the temporary archive on scope exit unless released. Keeps the
+        /// destination directory clean when an exception escapes (thread
+        /// creation, allocations) after the temporary file was created.
+        class TempArchiveGuard
+        {
+        public:
+            explicit TempArchiveGuard(std::string path) : path_(std::move(path)) {}
+            ~TempArchiveGuard()
+            {
+                if (!released_)
+                {
+                    RemoveTemporaryArchive(path_);
+                }
+            }
+            TempArchiveGuard(const TempArchiveGuard&) = delete;
+            TempArchiveGuard& operator=(const TempArchiveGuard&) = delete;
+            void Release() noexcept { released_ = true; }
+
+        private:
+            std::string path_;
+            bool released_ = false;
+        };
+
+        /// Best-effort fsync of the destination directory so the rename/link
+        /// survives a crash on filesystems that need it. Failures are ignored:
+        /// the archive itself is already synced and the name is visible.
+        void SyncArchiveDirectory(const std::string& output_file)
+        {
+            const fs::path parent = fs::path(output_file).parent_path();
+            const std::string dir = parent.empty() ? "." : parent.string();
+            const int fd = ::open(dir.c_str(), O_RDONLY | O_CLOEXEC);
+            if (fd < 0)
+            {
+                return;
+            }
+            (void)::fsync(fd);
+            (void)::close(fd);
+        }
+    } // namespace
+
     Status BlockStore::PackPipeline(const std::string& output_pack_file, bool force)
     {
-        std::error_code exists_ec;
-        if (!force && fs::exists(output_pack_file, exists_ec))
+        if (!force)
         {
-            return error_io("output archive '{}' already exists; pass --force to overwrite it", output_pack_file);
+            std::error_code exists_ec;
+            const auto existing = fs::symlink_status(output_pack_file, exists_ec);
+            if (exists_ec && exists_ec != std::errc::no_such_file_or_directory)
+            {
+                return error_io("cannot inspect output archive '{}': {}", output_pack_file, exists_ec.message());
+            }
+            // symlink_status also sees broken symlinks, which fs::exists reports as
+            // missing; replacing one without --force would be surprising.
+            if (!exists_ec && existing.type() != fs::file_type::not_found)
+            {
+                return error_io("output archive '{}' already exists; pass --force to overwrite it",
+                                output_pack_file);
+            }
         }
-        auto write_file_status = NewPosixWriteFile(output_pack_file, true);
-        if (!write_file_status)
-        {
-            return error_io("fail to open {}: {} ", output_pack_file, strerror(errno));
-        }
-        auto& write_file = write_file_status.value();
+
         block_region_size_ = 0;
         max_block_region_size_ = 0;
         file_data_compressed_size_ = 0;
@@ -710,7 +782,36 @@ namespace ctar
             return status;
         }
 
-        packed_file_ = output_pack_file;
+        // Pack into a temporary file next to the destination and rename it into
+        // place only once the archive is complete and synced, so a failure or a
+        // crash never leaves a partial archive under the final name.
+        static std::atomic<uint64_t> temp_sequence{0};
+        std::string temp_pack_file;
+        std::unique_ptr<WriteFile> write_file;
+        ErrorStatus create_error{};
+        for (int attempt = 0; attempt < 16 && !write_file; ++attempt)
+        {
+            const std::string candidate = MakeTempPackPath(output_pack_file, temp_sequence.fetch_add(1));
+            auto write_file_status = NewPosixWriteFileExclusive(candidate);
+            if (write_file_status)
+            {
+                temp_pack_file = candidate;
+                write_file = std::move(write_file_status.value());
+            }
+            else
+            {
+                create_error = write_file_status.error();
+            }
+        }
+        if (!write_file)
+        {
+            return error_io("fail to create a temporary archive next to '{}': {}", output_pack_file,
+                            create_error.err_message);
+        }
+        TempArchiveGuard temp_guard(temp_pack_file);
+        const auto cleanup_temp = [&temp_pack_file] { RemoveTemporaryArchive(temp_pack_file); };
+
+        packed_file_ = temp_pack_file;
         const uint64_t pack_begin_time = CurrentTimeMillis();
         const uint64_t raw_meta_size = GetRawMetaSize();
         const CompressionType file_data_type = compression_config_.compression_type;
@@ -746,7 +847,7 @@ namespace ctar
                 available_block_buffers_.push_back(std::make_unique<BlockBuffer>());
             }
         }
-        std::thread writer([this] { WriterLoop(); });
+        std::thread writer([this, output = write_file.get()] { WriterLoop(output); });
 
         // Will block here until all tasks (pack or unpack, not include the task that write data to disk) complete or
         // any task fails.
@@ -762,12 +863,12 @@ namespace ctar
 
         if (!status)
         {
-            fs::remove(output_pack_file);
+            cleanup_temp();
             return status;
         }
         if (writer_error_)
         {
-            fs::remove(output_pack_file);
+            cleanup_temp();
             return std::unexpected(*writer_error_);
         }
 
@@ -795,7 +896,7 @@ namespace ctar
         }
         if (meta_buffer.size() != raw_meta_size)
         {
-            fs::remove(output_pack_file);
+            cleanup_temp();
             return error_run_time("internal error: metadata size {} does not match the precomputed {}", meta_buffer.size(),
                                   raw_meta_size);
         }
@@ -862,7 +963,7 @@ namespace ctar
         status = write_file->RandomWrite(0, header_bytes.size(), header_bytes.data());
         if (!status)
         {
-            fs::remove(output_pack_file);
+            cleanup_temp();
             return status;
         }
         if (stored_metadata_size > 0)
@@ -871,7 +972,7 @@ namespace ctar
                                               static_cast<size_t>(stored_metadata_size), stored_metadata);
             if (!status)
             {
-                fs::remove(output_pack_file);
+                cleanup_temp();
                 return status;
             }
         }
@@ -881,19 +982,58 @@ namespace ctar
                                          sizeof(kMagicNumber), magic_number.data());
         if (!status)
         {
-            fs::remove(output_pack_file);
+            cleanup_temp();
             return status;
         }
         if (!write_file->TruncFile(static_cast<off_t>(pack_file_size)))
         {
-            fs::remove(output_pack_file);
+            cleanup_temp();
             return error_io("fail to truncate compressed file {}: {}", output_pack_file, strerror(errno));
         }
         if (!write_file->Sync())
         {
-            fs::remove(output_pack_file);
+            cleanup_temp();
             return error_io("durable sync failed for archive {}: {}", output_pack_file, strerror(errno));
         }
+        write_file.reset();
+
+        if (force)
+        {
+            std::error_code rename_ec;
+            fs::rename(temp_pack_file, output_pack_file, rename_ec);
+            if (rename_ec)
+            {
+                cleanup_temp();
+                return error_io("fail to move the temporary archive into place '{}': {}", output_pack_file,
+                                rename_ec.message());
+            }
+        }
+        else
+        {
+            // link() is atomic: it fails with EEXIST if the destination appeared
+            // after the early check, so a concurrent writer is never overwritten.
+            // Never fall back to rename() here: it would replace that destination
+            // without --force.
+            if (::link(temp_pack_file.c_str(), output_pack_file.c_str()) != 0)
+            {
+                const int link_errno = errno;
+                cleanup_temp();
+                if (link_errno == EEXIST)
+                {
+                    return error_io("output archive '{}' already exists; pass --force to overwrite it",
+                                    output_pack_file);
+                }
+                return error_io(
+                    "cannot publish '{}' without --force: the filesystem refused an atomic no-replace move ({})",
+                    output_pack_file, strerror(link_errno));
+            }
+            // The archive is already reachable under the final name; only the
+            // temporary link remains to be dropped.
+            RemoveTemporaryArchive(temp_pack_file);
+        }
+        SyncArchiveDirectory(output_pack_file);
+        temp_guard.Release();
+        packed_file_ = output_pack_file;
         return {};
     }
 
