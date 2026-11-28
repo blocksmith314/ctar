@@ -45,8 +45,6 @@ namespace ctar
     {
     public:
         Buffer() = default;
-        /// Library-internal: takes ownership of an already-filled buffer.
-        Buffer(std::unique_ptr<char[]> data, size_t size) noexcept;
 
         Buffer(const Buffer&) = delete;
         Buffer& operator=(const Buffer&) = delete;
@@ -59,6 +57,10 @@ namespace ctar
         }
 
     private:
+        friend class ArchiveReader;
+        /// Created only by ArchiveReader::MakeBuffer.
+        Buffer(std::unique_ptr<char[]> data, size_t size) noexcept;
+
         std::unique_ptr<char[]> data_;
         size_t size_ = 0;
     };
@@ -98,8 +100,9 @@ namespace ctar
         /// Reject archives whose uncompressed metadata exceeds this many bytes.
         /// 0 means unlimited. Matches the CLI's --max-metadata-size.
         uint64_t max_metadata_size = 1ULL << 30;
-        /// Reject files whose original size exceeds this many bytes. 0 means
-        /// unlimited. Matches the CLI's --max-decompressed-size.
+        /// Reject files whose original size, or whose stored size in the
+        /// archive, exceeds this many bytes. 0 means unlimited. Matches the
+        /// CLI's --max-decompressed-size.
         uint64_t max_file_size = 1ULL << 30;
     };
 
@@ -141,6 +144,7 @@ namespace ctar
     private:
         struct Impl;
         explicit ArchiveReader(std::unique_ptr<Impl> impl) noexcept;
+        static std::shared_ptr<const Buffer> MakeBuffer(std::unique_ptr<char[]> data, size_t size);
 
         std::unique_ptr<Impl> impl_;
     };

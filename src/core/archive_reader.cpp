@@ -92,6 +92,14 @@ namespace
         }
         return std::format("{}/{}", parent, name);
     }
+
+    /// A stored file name must be exactly one path component. The archive is
+    /// untrusted: names containing separators or "."/".." would otherwise
+    /// escape the virtual root or change the meaning of Entry::path.
+    bool IsValidPathComponent(const std::string_view name)
+    {
+        return !name.empty() && name != "." && name != ".." && name.find('/') == std::string_view::npos;
+    }
 } // namespace
 
 struct ArchiveReader::Impl
@@ -143,6 +151,21 @@ struct ArchiveReader::Impl
                 return std::unexpected(FromStatus(stored.error()));
             }
             const fs::path relative = fs::path(stored.value()).lexically_normal().lexically_relative(root_fs);
+            if (relative.is_absolute())
+            {
+                return std::unexpected(
+                    MakeError(ErrorCode::kCorruption,
+                              std::format("directory path '{}' is outside the archive root", stored.value())));
+            }
+            for (const auto& component : relative)
+            {
+                if (component == "." || component == "..")
+                {
+                    return std::unexpected(
+                        MakeError(ErrorCode::kCorruption,
+                                  std::format("directory path '{}' escapes the archive root", stored.value())));
+                }
+            }
             std::string virtual_path;
             if (relative.empty() || relative == ".")
             {
@@ -169,6 +192,11 @@ struct ArchiveReader::Impl
                 if (!name)
                 {
                     return std::unexpected(FromStatus(name.error()));
+                }
+                if (!IsValidPathComponent(name.value()))
+                {
+                    return std::unexpected(
+                        MakeError(ErrorCode::kCorruption, std::format("invalid file name '{}'", name.value())));
                 }
                 if (!names.emplace(name.value(), file_id).second)
                 {
@@ -292,12 +320,13 @@ struct ArchiveReader::Impl
         const uint64_t stored_size = block.file_compressed_sizes[index];
         const CompressionType compression_type = block.file_compressed_types[index];
 
-        if (options.max_file_size > 0 && original_size > options.max_file_size)
+        if (options.max_file_size > 0 &&
+            (original_size > options.max_file_size || stored_size > options.max_file_size))
         {
             return std::unexpected(MakeError(
                 ErrorCode::kTooLarge,
-                std::format("file is {} bytes, above the configured limit of {} bytes", original_size,
-                            options.max_file_size)));
+                std::format("file is {} bytes ({} stored), above the configured limit of {} bytes", original_size,
+                            stored_size, options.max_file_size)));
         }
 
         std::unique_ptr<char[]> stored;
@@ -339,12 +368,16 @@ struct ArchiveReader::Impl
             return std::unexpected(
                 MakeError(ErrorCode::kCorruption, "file data does not match the recorded hash"));
         }
-        return std::shared_ptr<const Buffer>(
-            std::make_shared<Buffer>(std::move(data), static_cast<size_t>(original_size)));
+        return ArchiveReader::MakeBuffer(std::move(data), static_cast<size_t>(original_size));
     }
 };
 
 Buffer::Buffer(std::unique_ptr<char[]> data, const size_t size) noexcept : data_(std::move(data)), size_(size) {}
+
+std::shared_ptr<const Buffer> ArchiveReader::MakeBuffer(std::unique_ptr<char[]> data, const size_t size)
+{
+    return std::shared_ptr<const Buffer>(new Buffer(std::move(data), size));
+}
 
 File::File(std::shared_ptr<const Buffer> data) noexcept : data_(std::move(data)) {}
 

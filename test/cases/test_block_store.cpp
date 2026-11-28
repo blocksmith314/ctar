@@ -7,6 +7,8 @@
 #include <ranges>
 #include <string>
 
+#include <ctar/reader.h>
+
 #include "src/core/block_store.h"
 #include "src/core/file_handle.h"
 #include "src/utils/coding.h"
@@ -1032,6 +1034,91 @@ namespace ctar
         EXPECT_NE(status.error().err_message.find("depth"), std::string::npos);
 
         fs::remove_all(root);
+    }
+
+    TEST(MalformedArchive, ArchiveReaderRejectsFileNameWithSeparator)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        std::string bytes = fixture.Bytes();
+
+        constexpr size_t kMetadataOffsetField = 96;
+        constexpr size_t kMetadataSizeField = 112;
+        constexpr size_t kMetadataTypeField = 120;
+        constexpr size_t kMetadataChecksumField = 128;
+        const size_t metadata_offset = ReadU64At(bytes, kMetadataOffsetField);
+        const size_t metadata_size = ReadU64At(bytes, kMetadataSizeField);
+        ASSERT_EQ(ReadU64At(bytes, kMetadataTypeField), static_cast<uint64_t>(CompressionType::kNone));
+
+        // PackFileMeta: four scalars, dir_name_data, file_name_data.
+        size_t pos = metadata_offset;
+        for (int i = 0; i < 4; ++i)
+        {
+            pos += sizeof(uint64_t);
+        }
+        const uint64_t dir_len = ReadU64At(bytes, pos);
+        pos += sizeof(uint64_t) + static_cast<size_t>(dir_len);
+        const uint64_t file_len = ReadU64At(bytes, pos);
+        pos += sizeof(uint64_t);
+        const size_t file_data_start = pos;
+
+        const size_t dot = bytes.find('.', file_data_start);
+        ASSERT_LT(dot, file_data_start + static_cast<size_t>(file_len));
+        bytes[dot] = '/';
+
+        const std::string metadata = bytes.substr(metadata_offset, metadata_size);
+        WriteU64At(bytes, kMetadataChecksumField, XXH64(metadata.data(), metadata.size(), kHashSeed));
+        WriteWholeFile(fixture.archive.string(), bytes);
+
+        auto reader = ArchiveReader::Open(fixture.archive.string());
+        ASSERT_FALSE(reader);
+        EXPECT_EQ(reader.error().code, ErrorCode::kCorruption);
+        EXPECT_NE(reader.error().message.find("invalid file name"), std::string::npos) << reader.error().message;
+
+        fixture.Cleanup();
+    }
+
+    TEST(MalformedArchive, ArchiveReaderRejectsDirectoryEscapingRoot)
+    {
+        MalformedArchiveFixture fixture;
+        fixture.Create();
+        std::string bytes = fixture.Bytes();
+
+        constexpr size_t kMetadataOffsetField = 96;
+        constexpr size_t kMetadataSizeField = 112;
+        constexpr size_t kMetadataTypeField = 120;
+        constexpr size_t kMetadataChecksumField = 128;
+        const size_t metadata_offset = ReadU64At(bytes, kMetadataOffsetField);
+        const size_t metadata_size = ReadU64At(bytes, kMetadataSizeField);
+        ASSERT_EQ(ReadU64At(bytes, kMetadataTypeField), static_cast<uint64_t>(CompressionType::kNone));
+
+        size_t pos = metadata_offset;
+        for (int i = 0; i < 4; ++i)
+        {
+            pos += sizeof(uint64_t);
+        }
+        const uint64_t dir_len = ReadU64At(bytes, pos);
+        pos += sizeof(uint64_t);
+        const size_t dir_data_start = pos;
+        ASSERT_GE(dir_len, 3U);
+
+        // The last directory name is "sub"; make the stored path end in "/../".
+        ASSERT_EQ(bytes.substr(dir_data_start + static_cast<size_t>(dir_len) - 3, 3), "sub");
+        bytes[dir_data_start + static_cast<size_t>(dir_len) - 3] = '.';
+        bytes[dir_data_start + static_cast<size_t>(dir_len) - 2] = '.';
+        bytes[dir_data_start + static_cast<size_t>(dir_len) - 1] = '/';
+
+        const std::string metadata = bytes.substr(metadata_offset, metadata_size);
+        WriteU64At(bytes, kMetadataChecksumField, XXH64(metadata.data(), metadata.size(), kHashSeed));
+        WriteWholeFile(fixture.archive.string(), bytes);
+
+        auto reader = ArchiveReader::Open(fixture.archive.string());
+        ASSERT_FALSE(reader);
+        EXPECT_EQ(reader.error().code, ErrorCode::kCorruption);
+        EXPECT_NE(reader.error().message.find("escapes the archive root"), std::string::npos)
+            << reader.error().message;
+
+        fixture.Cleanup();
     }
 
     namespace

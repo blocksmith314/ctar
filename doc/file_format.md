@@ -163,7 +163,7 @@ The reader rejects archives that violate these cross-field invariants; a writer 
 
 - `file_ids` are strictly increasing within a block, so a block cannot reference the same file twice.
 - File ranges (`file_offsets` + `file_compressed_sizes`) are ordered, non-overlapping, and fit inside `payload_size`.
-- For `kLZ4`/`kLZ4HC`, `file_orig_sizes` and `file_compressed_sizes` fit the LZ4 `int` API, `file_orig_sizes <= 255 * file_compressed_sizes`, and a zero original size requires a zero stored size.
+- For `kLZ4`/`kLZ4HC`, `file_orig_sizes` and `file_compressed_sizes` fit the LZ4 `int` API, `file_orig_sizes <= 255 * file_compressed_sizes`, a zero original size requires a zero stored size, and the stored size must be strictly smaller than the original size (the packer stores the file raw when compression does not shrink it).
 - Every `file_ids[i]` exists in `file_entry_records`; the entry's `block_id`, `file_orig_size`, `file_compressed_size` and absolute `file_offset` agree with the block, and every indexed file is referenced exactly once.
 - Directory paths are unique, and a directory contains no duplicate file names, so every extracted file has a distinct output path.
 - The directory index must form a tree rooted at `kRootDirId` (1): every non-root directory appears exactly once as a child, no directory is its own ancestor, and every directory is reachable from the root. The rendering commands (`tree`, `ls`, `dump`) additionally reject trees deeper than 128 to bound their recursion; `unpack` and `stat` do not apply that limit.

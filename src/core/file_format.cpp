@@ -474,6 +474,15 @@ namespace
                             "{}: original size {} exceeds the LZ4 expansion bound of {} x stored size {}",
                             entry_label(i), original, kLz4MaxExpansion, compressed);
                     }
+                    // The packer stores LZ4 data only when it is strictly smaller;
+                    // equal or larger stored data is the kNone fallback. Rejecting
+                    // it here also bounds the stored buffer a reader allocates.
+                    if (compressed >= original)
+                    {
+                        return error_corruption(
+                            "{}: LZ4 stored size {} is not smaller than the original size {}", entry_label(i),
+                            compressed, original);
+                    }
                 }
                 break;
             default:

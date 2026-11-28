@@ -161,7 +161,7 @@ data_block_meta[data_block_count]
 
 - 块内 `file_ids` 严格递增，同一块不能引用同一个文件两次。
 - 文件区间（`file_offsets` + `file_compressed_sizes`）有序、互不重叠，且都位于 `payload_size` 内。
-- 对 `kLZ4`/`kLZ4HC`，`file_orig_sizes` 和 `file_compressed_sizes` 必须落在 LZ4 的 `int` API 范围内，`file_orig_sizes <= 255 * file_compressed_sizes`，且原始大小为 0 时存储大小也必须为 0。
+- 对 `kLZ4`/`kLZ4HC`，`file_orig_sizes` 和 `file_compressed_sizes` 必须落在 LZ4 的 `int` API 范围内，`file_orig_sizes <= 255 * file_compressed_sizes`，原始大小为 0 时存储大小也必须为 0，且存储大小必须严格小于原始大小（压缩没有变小时打包器会存原始数据）。
 - 每个 `file_ids[i]` 都必须存在于 `file_entry_records`，其 `block_id`、`file_orig_size`、`file_compressed_size` 和绝对 `file_offset` 与块元数据一致；所有索引文件都必须被且仅被引用一次。
 - 目录路径唯一，同一目录内文件名唯一，保证每个解压文件有唯一的输出路径。
 - 目录索引必须是以 `kRootDirId`（1）为根的树：每个非 root 目录恰好出现一次作为子节点，任何目录都不是自己的祖先，所有目录都能从 root 到达。渲染命令（`tree`、`ls`、`dump`）额外拒绝深度超过 128 的树以限制递归；`unpack` 和 `stat` 不施加该限制。空 data block 是非法的。

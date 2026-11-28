@@ -341,6 +341,28 @@ namespace ctar
             << status.error().message();
     }
 
+    TEST(DataBlobMeta, RejectsLz4StoredSizeNotSmallerThanOriginal)
+    {
+        for (const uint64_t stored : {100ULL, 150ULL})
+        {
+            DataBlockMeta block;
+            block.file_ids = {1};
+            block.file_orig_sizes = {100};
+            block.file_compressed_sizes = {stored};
+            block.file_compressed_types = {CompressionType::kLZ4};
+            block.file_offsets = {0};
+            block.file_hashes = {0};
+            block.payload_size = stored;
+            block.block_size = stored;
+
+            const Status status = ValidateDataBlockMeta(block);
+            ASSERT_FALSE(status);
+            EXPECT_EQ(status.error().type(), ErrorType::kCorruption);
+            EXPECT_NE(status.error().err_message.find("not smaller"), std::string::npos)
+                << status.error().message();
+        }
+    }
+
     TEST(DataBlobMeta, RejectsLz4EntryWithZeroOriginalSize)
     {
         DataBlockMeta block;

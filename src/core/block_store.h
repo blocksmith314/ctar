@@ -345,7 +345,6 @@ namespace ctar
         {
             return data_block_metas_;
         }
-        [[nodiscard]] uint64_t GetFileDataOffset() const noexcept { return file_data_offset_; }
 
         /// @brief Read and validate only the archive header; no metadata is parsed.
         [[nodiscard]] Status ReadPackHeaderOnly(const std::string& pack_file_path);
