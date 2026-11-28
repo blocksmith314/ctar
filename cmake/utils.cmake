@@ -1,5 +1,5 @@
 
-# src/core/version.h is the single source of truth for both the tool version
+# include/ctar/version.h is the single source of truth for both the tool version
 # and the on-disk archive format version. The numbers are read as plain text,
 # so nothing else has to be kept in sync by hand.
 function(ctar_extract_version)
@@ -8,7 +8,7 @@ function(ctar_extract_version)
     set(_tool_prefix   "kToolVersion")
     set(_format_prefix "kFileFormatVersion")
 
-    set(_header "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src/core/version.h")
+    set(_header "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../include/ctar/version.h")
     if(NOT EXISTS "${_header}")
         message(FATAL_ERROR "ctar_extract_version: ${_header} not found")
     endif()

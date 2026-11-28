@@ -38,8 +38,44 @@ cmake --build "$consumer_build" >/dev/null
 echo "== running the consumer =="
 "$consumer_build/ctar_consumer"
 
+echo "== checking that no test framework was installed =="
+pollution=$(find "$prefix" \( -name '*gtest*' -o -name '*gmock*' \) -print)
+if [[ -n "$pollution" ]]; then
+    echo "error: test framework files were installed:" >&2
+    echo "$pollution" >&2
+    exit 1
+fi
+
+echo "== checking pkg-config =="
+if command -v pkg-config >/dev/null 2>&1; then
+    pc_file=$(find "$prefix" -name 'ctar.pc' -type f -print -quit)
+    if [[ -z "$pc_file" ]]; then
+        echo "error: ctar.pc was not installed" >&2
+        exit 1
+    fi
+    pc_dir=$(dirname "$pc_file")
+    pkg_cflags=$(PKG_CONFIG_PATH="$pc_dir" pkg-config --cflags ctar)
+    pkg_libs=$(PKG_CONFIG_PATH="$pc_dir" pkg-config --static --libs ctar)
+    # The prefix is expressed relative to the .pc file, so normalize before
+    # comparing it with the install prefix.
+    pc_prefix=$(PKG_CONFIG_PATH="$pc_dir" pkg-config --variable=prefix ctar)
+    prefix_real=$(cd "$prefix" && pwd -P)
+    pc_prefix_real=$(cd "$pc_prefix" 2>/dev/null && pwd -P) || pc_prefix_real=""
+    if [[ "$pc_prefix_real" != "$prefix_real" ]]; then
+        echo "error: pkg-config prefix '$pc_prefix' does not resolve to '$prefix'" >&2
+        exit 1
+    fi
+    read -r -a pc_cflags <<< "$pkg_cflags"
+    read -r -a pc_libs <<< "$pkg_libs"
+    "${CXX:-c++}" "${pc_cflags[@]}" "$repo_root/test/consumer/main.cpp" "${pc_libs[@]}" \
+        -o "$tmp_root/pkgconfig-consumer"
+    "$tmp_root/pkgconfig-consumer"
+else
+    echo "pkg-config not found; skipping the pkg-config check"
+fi
+
 echo "== checking that lz4 is bundled =="
-archive=$(find "$prefix" -name 'libctar.a' -type f | head -n 1)
+archive=$(find "$prefix" -name 'libctar.a' -type f -print -quit)
 if [[ -z "$archive" ]]; then
     echo "error: libctar.a not found under $prefix" >&2
     exit 1

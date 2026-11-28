@@ -1,4 +1,4 @@
-#include "version.h"
+#include <ctar/version.h>
 
 namespace ctar
 {

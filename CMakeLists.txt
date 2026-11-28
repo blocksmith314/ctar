@@ -96,6 +96,7 @@ target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_23)
 target_include_directories(${PROJECT_NAME}_lib PUBLIC
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/api>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
@@ -162,6 +163,10 @@ if (BUILD_TEST)
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(test_warning_fix INTERFACE "-Wno-maybe-uninitialized")
     endif ()
+
+    # Googletest adds install rules (headers, libraries, .pc files) by default.
+    # Keep them out of the ctar install prefix; the tests only need the targets.
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 
     set(GTEST_SOURCE_DIR "${PROJECT_SOURCE_DIR}/third_party/googletest")
     if (EXISTS "${GTEST_SOURCE_DIR}/CMakeLists.txt")
@@ -289,14 +294,8 @@ endif()
 # details and are deliberately not installed.
 install(FILES
         ${PROJECT_SOURCE_DIR}/include/ctar/ctar.h
+        ${PROJECT_SOURCE_DIR}/include/ctar/version.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ctar
-)
-# version.h is the single source of truth for the tool and format versions;
-# install it verbatim under the public name.
-install(FILES
-        ${PROJECT_SOURCE_DIR}/src/core/version.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ctar
-        RENAME version.h
 )
 
 install(EXPORT ${PROJECT_NAME}Targets
@@ -332,7 +331,12 @@ install(FILES
 )
 
 # ========= pkg-config .pc file =========
-set(prefix "${CMAKE_INSTALL_PREFIX}")
+# Relocatable prefix: derive it from the .pc file location so
+# `cmake --install <build> --prefix <dir>` still points at the real prefix.
+file(RELATIVE_PATH CTAR_PC_PREFIX_REL
+        "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pkgconfig"
+        "${CMAKE_INSTALL_PREFIX}")
+set(prefix "\${pcfiledir}/${CTAR_PC_PREFIX_REL}")
 set(exec_prefix "\${prefix}")
 set(libdir "\${exec_prefix}/${CMAKE_INSTALL_LIBDIR}")
 set(includedir "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")

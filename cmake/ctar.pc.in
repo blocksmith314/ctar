@@ -8,4 +8,4 @@ Description: Cloud‑era Tar — modern archive library optimized for cloud blob
 Version: @PROJECT_VERSION@
 Libs: -L${libdir} -lctar
 Libs.private: -pthread
-Cflags: -I${includedir}
+Cflags: -I${includedir} -std=c++23
